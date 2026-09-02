@@ -6,6 +6,8 @@ import { BillingScreen } from '@/screens/BillingScreen';
 import { OrderScreen } from '@/screens/OrderScreen';
 import { PersonSummaryScreen } from '@/screens/PersonSummaryScreen';
 import { FinalSummaryScreen } from '@/screens/FinalSummaryScreen';
+import { PaymentScreen } from '@/screens/PaymentScreen';
+import { PaymentResult } from '@/data/consolidation';
 import {
   PlaceRestaurant,
   BillingMethod,
@@ -22,7 +24,8 @@ type Screen =
   | 'billing'
   | 'order'
   | 'personSummary'
-  | 'final';
+  | 'final'
+  | 'payment';
 
 let idCounter = 0;
 const genId = () => `id-${++idCounter}-${Date.now()}`;
@@ -37,6 +40,13 @@ export default function App() {
   const [orders, setOrders] = useState<PersonOrder[]>([]);
   const [currentPersonIdx, setCurrentPersonIdx] = useState(0);
   const [editingFromSummary, setEditingFromSummary] = useState(false);
+
+  // Payment calculator state (lifted so it persists across navigation)
+  const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
+  const [paymentStep, setPaymentStep] = useState<'intro' | 'price' | 'tip' | 'result'>('intro');
+  const [hasTip, setHasTip] = useState<boolean | null>(null);
+  const [tipInput, setTipInput] = useState('');
+  const [paymentResult, setPaymentResult] = useState<PaymentResult | null>(null);
 
   const reset = useCallback(() => {
     setRestaurant(null);
@@ -199,6 +209,32 @@ export default function App() {
             onRestart={reset}
             theme={theme}
             onToggleTheme={toggleTheme}
+            onOpenPayment={() => {
+              if (paymentStep === 'intro') setPaymentStep('price');
+              setScreen('payment');
+            }}
+          />
+        )}
+
+        {screen === 'payment' && (
+          <PaymentScreen
+            restaurant={restaurant}
+            orders={orders}
+            groups={groups}
+            people={people}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            onBack={() => setScreen('final')}
+            priceInputs={priceInputs}
+            setPriceInputs={setPriceInputs}
+            paymentStep={paymentStep}
+            setPaymentStep={setPaymentStep}
+            hasTip={hasTip}
+            setHasTip={setHasTip}
+            tipInput={tipInput}
+            setTipInput={setTipInput}
+            paymentResult={paymentResult}
+            setPaymentResult={setPaymentResult}
           />
         )}
       </div>
