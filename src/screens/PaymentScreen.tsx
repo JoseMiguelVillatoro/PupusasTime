@@ -8,6 +8,7 @@ import {
   PersonOrder,
   PlaceRestaurant,
   AccountGroup,
+  BillingMethod,
   MASA_LABEL,
   PUPUSA_BY_ID,
 } from '@/data/pupusa';
@@ -22,6 +23,7 @@ import { Theme } from '@/hooks/useTheme';
 
 interface Props {
   restaurant: PlaceRestaurant | null;
+  billing: BillingMethod;
   orders: PersonOrder[];
   groups: AccountGroup[];
   people: string[];
@@ -42,6 +44,7 @@ interface Props {
 
 export function PaymentScreen({
   restaurant,
+  billing,
   orders,
   groups,
   people,
@@ -61,6 +64,11 @@ export function PaymentScreen({
 }: Props) {
   const [copied, setCopied] = useState(false);
   const consolidated = consolidateOrders(orders);
+  const paymentGroups = billing === 'single'
+    ? [{ id: 'single-account', name: 'Cuenta única', personIds: people.map((_, index) => `p${index}`) }]
+    : billing === 'split'
+      ? people.map((name, index) => ({ id: `person-account-${index}`, name: name || `Persona ${index + 1}`, personIds: [`p${index}`] }))
+      : groups;
 
   const orderedTypes = Array.from(
     new Map(
@@ -82,7 +90,7 @@ export function PaymentScreen({
 
   const handleTipContinue = () => {
     if (groups.length > 0) {
-      const result = calculatePayment(orders, groups, people, priceByType, tipPercent);
+      const result = calculatePayment(orders, paymentGroups, people, priceByType, tipPercent);
       setPaymentResult(result);
       setPaymentStep('result');
     }

@@ -219,6 +219,7 @@ export default function App() {
         {screen === 'payment' && (
           <PaymentScreen
             restaurant={restaurant}
+            billing={billing || 'single'}
             orders={orders}
             groups={groups}
             people={people}
