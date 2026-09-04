@@ -91,7 +91,7 @@ export function FinalSummaryScreen({
 
   return (
     <div className="min-h-screen flex flex-col">
-      <TopBar onBack={onEdit} right={<ThemeToggle theme={theme} onToggleTheme={onToggleTheme} />} />
+      <TopBar onBack={onEdit} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
 
       <div className="px-5 pt-4 pb-2 text-center animate-slideUp">
         <h2 className="font-display text-3xl font-bold text-charcoal-900 dark:text-cream-50">

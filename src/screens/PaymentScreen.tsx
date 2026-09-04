@@ -112,7 +112,7 @@ export function PaymentScreen({
 
   return (
     <div className="min-h-screen flex flex-col">
-      <TopBar onBack={onBack} right={<ThemeToggle theme={theme} onToggleTheme={onToggleTheme} />} />
+      <TopBar onBack={onBack} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
 
       <div className="px-5 pt-4 pb-2 animate-slideUp">
         <button
