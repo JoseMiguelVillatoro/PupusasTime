@@ -89,11 +89,9 @@ export function PaymentScreen({
   };
 
   const handleTipContinue = () => {
-    if (groups.length > 0) {
-      const result = calculatePayment(orders, paymentGroups, people, priceByType, tipPercent);
-      setPaymentResult(result);
-      setPaymentStep('result');
-    }
+    const result = calculatePayment(orders, paymentGroups, people, priceByType, tipPercent);
+    setPaymentResult(result);
+    setPaymentStep('result');
   };
 
   const currentCopyText = paymentResult
