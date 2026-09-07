@@ -89,9 +89,13 @@ export function PaymentScreen({
   };
 
   const handleTipContinue = () => {
-    const result = calculatePayment(orders, paymentGroups, people, priceByType, tipPercent);
-    setPaymentResult(result);
-    setPaymentStep('result');
+    try {
+      const result = calculatePayment(orders, paymentGroups, people, priceByType, tipPercent);
+      setPaymentResult(result);
+      setPaymentStep('result');
+    } catch (err) {
+      console.error('calculatePayment error:', err, { orders, paymentGroups, people, priceByType, tipPercent });
+    }
   };
 
   const currentCopyText = paymentResult

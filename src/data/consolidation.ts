@@ -205,7 +205,9 @@ export function calculatePayment(
     if (i === accounts.length - 1) {
       a.tip = tipRemaining;
     } else {
-      const t = Math.round((a.subtotal / generalSubtotal) * generalTip);
+      const t = generalSubtotal > 0
+        ? Math.round((a.subtotal / generalSubtotal) * generalTip)
+        : 0;
       a.tip = t;
       tipRemaining -= t;
     }
