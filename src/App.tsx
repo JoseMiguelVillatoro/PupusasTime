@@ -56,6 +56,11 @@ export default function App() {
     setOrders([]);
     setCurrentPersonIdx(0);
     setEditingFromSummary(false);
+    setPriceInputs({});
+    setPaymentStep('intro');
+    setHasTip(null);
+    setTipInput('');
+    setPaymentResult(null);
     setScreen('home');
   }, []);
 
@@ -66,6 +71,11 @@ export default function App() {
     setGroups([]);
     setOrders([]);
     setCurrentPersonIdx(0);
+    setPriceInputs({});
+    setPaymentStep('intro');
+    setHasTip(null);
+    setTipInput('');
+    setPaymentResult(null);
     setScreen('restaurant');
   };
 
