@@ -12,9 +12,17 @@ const HISTORY_KEY = 'pupusastime:history:v1';
 const PRICES_KEY = 'pupusastime:prices:v1';
 const HISTORY_LIMIT = 100;
 
+/**
+ * Con el backend simulado, cada pestaña hace de un teléfono distinto, así que
+ * la pupuseada en curso se guarda por pestaña. En producción es localStorage.
+ */
+function storeFor(key: string): Storage {
+  return key === CURRENT_KEY && import.meta.env.VITE_SHARED_BACKEND === 'memory' ? sessionStorage : localStorage;
+}
+
 function read<T>(key: string): T | null {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = storeFor(key).getItem(key);
     return raw ? (JSON.parse(raw) as T) : null;
   } catch {
     return null;
@@ -23,7 +31,7 @@ function read<T>(key: string): T | null {
 
 function write(key: string, value: unknown): void {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    storeFor(key).setItem(key, JSON.stringify(value));
   } catch {
     // Sin espacio o sin permiso: seguimos sin guardar.
   }
@@ -31,7 +39,7 @@ function write(key: string, value: unknown): void {
 
 function remove(key: string): void {
   try {
-    localStorage.removeItem(key);
+    storeFor(key).removeItem(key);
   } catch {
     // ignorado
   }

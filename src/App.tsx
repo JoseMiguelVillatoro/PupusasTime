@@ -9,13 +9,33 @@ import { FinalSummaryScreen } from '@/screens/FinalSummaryScreen';
 import { PaymentScreen } from '@/screens/PaymentScreen';
 import { useTheme } from '@/hooks/useTheme';
 import { usePupuseada } from '@/state/usePupuseada';
-import { hasOrders } from '@/state/pupuseada';
+import { hasOrders, isHost } from '@/state/pupuseada';
 import { archive } from '@/state/storage';
+import { JoinScreen } from '@/screens/JoinScreen';
+import { LobbyScreen } from '@/screens/LobbyScreen';
+import { useSharedTable } from '@/shared/useSharedTable';
+import { normalizeCode } from '@/shared/backend';
 
 export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
   const { state, dispatch, finish } = usePupuseada();
+  const table = useSharedTable(state, dispatch);
   const themeProps = { theme, onToggleTheme: toggleTheme };
+  const host = isHost(state);
+
+  // Link de invitación: /?mesa=K7Q2X abre la pantalla para unirse.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('mesa');
+    if (!code) return;
+    params.delete('mesa');
+    const rest = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`);
+    if (state.shared && state.shared.code === normalizeCode(code)) return; // ya estamos en esa mesa
+    dispatch({ type: 'OPEN_JOIN', code });
+    // Solo al abrir la app.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const people = state.people;
   const currentIdx = people.findIndex((p) => p.id === state.currentPersonId);
@@ -35,7 +55,47 @@ export default function App() {
   return (
     <div className="min-h-screen bg-cream-100 dark:bg-night-400">
       <div className="max-w-md mx-auto min-h-screen bg-cream-100 dark:bg-night-400 relative">
-        {state.screen === 'home' && <HomeScreen onStart={start} {...themeProps} />}
+        {state.screen === 'home' && (
+          <HomeScreen onStart={start} onJoin={() => dispatch({ type: 'OPEN_JOIN' })} {...themeProps} />
+        )}
+
+        {state.screen === 'join' && (
+          <JoinScreen
+            initialCode={state.pendingCode}
+            busy={table.busy}
+            error={table.error}
+            onJoin={(code, name) => void table.join(code, name)}
+            onBack={() => {
+              table.clearError();
+              dispatch({ type: 'GO', screen: 'home' });
+            }}
+            {...themeProps}
+          />
+        )}
+
+        {state.screen === 'lobby' && state.shared && (
+          <LobbyScreen
+            shared={state.shared}
+            people={people}
+            restaurantName={state.restaurant?.name ?? null}
+            isHost={host}
+            busy={table.busy}
+            error={table.error}
+            offline={table.offline}
+            onOrderFor={(personId) => dispatch({ type: 'OPEN_ORDER_FOR', personId })}
+            onAddOffline={(name) => void table.addOffline(name)}
+            onRemove={(personId) => void table.remove(personId)}
+            onLock={async () => {
+              await table.setStatus('locked');
+              dispatch({ type: 'GO', screen: 'final' });
+            }}
+            onReopen={() => void table.setStatus('ordering')}
+            onViewOrder={() => dispatch({ type: 'GO', screen: 'final' })}
+            onLeave={() => finish(state)}
+            onDismissError={table.clearError}
+            {...themeProps}
+          />
+        )}
 
         {state.screen === 'restaurant' && (
           <RestaurantScreen
@@ -57,6 +117,9 @@ export default function App() {
                 : dispatch({ type: 'GO', screen: 'restaurant' })
             }
             onContinue={(list) => dispatch({ type: 'SET_PEOPLE', people: list })}
+            onShare={(hostName) => void table.share(hostName)}
+            shareBusy={table.busy}
+            shareError={table.error}
             {...themeProps}
           />
         )}
@@ -68,9 +131,12 @@ export default function App() {
             totalPeople={people.length}
             person={current}
             allOrders={people}
-            editingFromFinal={state.returnToFinal}
+            editingFromFinal={state.returnToFinal || Boolean(state.shared)}
             onBack={() => dispatch({ type: 'ORDER_BACK' })}
-            onComplete={(items, extras) => dispatch({ type: 'SAVE_ORDER', items, extras })}
+            onComplete={(items, extras) => {
+              dispatch({ type: 'SAVE_ORDER', items, extras });
+              if (state.shared) table.saveOrder(current.id, items, extras);
+            }}
             {...themeProps}
           />
         )}

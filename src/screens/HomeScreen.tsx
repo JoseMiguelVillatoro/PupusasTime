@@ -5,11 +5,12 @@ import { Theme } from '@/hooks/useTheme';
 
 interface Props {
   onStart: () => void;
+  onJoin: () => void;
   theme: Theme;
   onToggleTheme: () => void;
 }
 
-export function HomeScreen({ onStart, theme, onToggleTheme }: Props) {
+export function HomeScreen({ onStart, onJoin, theme, onToggleTheme }: Props) {
   return (
     <div className="min-h-screen flex flex-col px-6 py-10 relative overflow-hidden">
       {/* theme toggle */}
@@ -50,7 +51,12 @@ export function HomeScreen({ onStart, theme, onToggleTheme }: Props) {
             Cada quien pide. Nosotros hacemos las cuentas.
           </p>
 
-          <Button onClick={onStart}>Empezar pupuseada</Button>
+          <div className="w-full space-y-3">
+            <Button onClick={onStart}>Empezar pupuseada</Button>
+            <Button variant="secondary" onClick={onJoin}>
+              Unirme con un código
+            </Button>
+          </div>
 
           <p className="text-sm text-charcoal-700/60 dark:text-cream-200/50 mt-6">
             Sin cuentas. Sin login. Solo pupusas.
