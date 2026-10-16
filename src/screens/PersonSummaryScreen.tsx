@@ -4,7 +4,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { ProgressBar, LiveTotal } from '@/components/Progress';
 import { PupusaIcon } from '@/components/PupusaIcon';
 import { PersonOrder, MASA_LABEL, MASA_EMOJI, PUPUSA_BY_ID } from '@/data/pupusa';
-import { personTotal, consolidateOrders } from '@/data/consolidation';
+import { personTotal, consolidateOrders, formatCurrency } from '@/data/consolidation';
 import { Theme } from '@/hooks/useTheme';
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
   totalPeople: number;
   personOrder: PersonOrder;
   allOrders: PersonOrder[];
+  returnsToFinal: boolean;
   onEdit: () => void;
   onContinue: () => void;
   theme: Theme;
@@ -23,6 +24,7 @@ export function PersonSummaryScreen({
   totalPeople,
   personOrder,
   allOrders,
+  returnsToFinal,
   onEdit,
   onContinue,
   theme,
@@ -46,8 +48,8 @@ export function PersonSummaryScreen({
 
       <div className="flex-1 px-5 pt-4 space-y-3 overflow-y-auto pb-40">
         {personOrder.items.length === 0 && (
-          <p className="text-center text-charcoal-700/60 dark:text-cream-200/50 py-10">
-            {personOrder.name} no pidió pupusas todavía
+          <p className="text-center text-charcoal-700 dark:text-cream-200 py-6">
+            {personOrder.name} no pidió pupusas
           </p>
         )}
 
@@ -75,10 +77,26 @@ export function PersonSummaryScreen({
           );
         })}
 
+        {(personOrder.extras ?? []).length > 0 && (
+          <div className="rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 p-4">
+            <p className="font-bold text-charcoal-900 dark:text-cream-50 mb-2">Bebidas y extras</p>
+            <div className="space-y-1.5">
+              {(personOrder.extras ?? []).map((x) => (
+                <div key={x.id} className="flex justify-between text-sm text-charcoal-800 dark:text-cream-100">
+                  <span>
+                    {x.quantity} × {x.label}
+                  </span>
+                  <span className="font-bold tabular-nums">{formatCurrency(x.quantity * x.priceCents)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between p-4 mt-2">
           <span className="font-bold text-charcoal-900 dark:text-cream-50">Total de {personOrder.name}</span>
           <span className="text-2xl font-extrabold text-charcoal-900 dark:text-cream-50 tabular-nums">
-            {myTotal} 🫓
+            {myTotal} {myTotal === 1 ? 'pupusa' : 'pupusas'}
           </span>
         </div>
       </div>
@@ -88,7 +106,7 @@ export function PersonSummaryScreen({
           Editar pedido
         </Button>
         <Button onClick={onContinue}>
-          {isLast ? 'Ver orden final' : 'Siguiente persona'}
+          {returnsToFinal ? 'Volver al resumen' : isLast ? 'Ver orden final' : 'Siguiente persona'}
         </Button>
       </div>
     </div>

@@ -43,10 +43,20 @@ export interface PupusaItem {
   quantity: number;
 }
 
+/** Bebida o extra con precio propio (horchata, café, curtido extra…). */
+export interface ExtraItem {
+  id: string;
+  label: string;
+  priceCents: number;
+  quantity: number;
+}
+
+/** Una persona de la pupuseada y lo que pidió. `id` es un UUID estable. */
 export interface PersonOrder {
   id: string;
   name: string;
   items: PupusaItem[];
+  extras?: ExtraItem[];
 }
 
 export interface PlaceLocation {

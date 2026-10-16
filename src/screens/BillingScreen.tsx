@@ -2,36 +2,35 @@ import { useState } from 'react';
 import { Button } from '@/components/Button';
 import { TopBar } from '@/components/TopBar';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { BillingMethod, AccountGroup } from '@/data/pupusa';
+import { BillingMethod, AccountGroup, PersonOrder } from '@/data/pupusa';
 import { Theme } from '@/hooks/useTheme';
-import { personIdFor } from '@/data/consolidation';
+import { newId } from '@/state/pupuseada';
 import { Plus, X, Users, User, ChevronDown, Trash2, ArrowRight } from 'lucide-react';
 
 interface Props {
   onBack: () => void;
   onContinue: (method: BillingMethod, groups: AccountGroup[]) => void;
   selected: BillingMethod | null;
-  onSelect: (method: BillingMethod) => void;
   theme: Theme;
   onToggleTheme: () => void;
-  people: string[];
+  people: PersonOrder[];
   initialGroups: AccountGroup[];
 }
 
-let groupIdCounter = 0;
-const genGroupId = () => `grp-${++groupIdCounter}-${Date.now()}`;
+const genGroupId = () => `grp-${newId()}`;
 
 export function BillingScreen({
   onBack,
   onContinue,
-  selected,
-  onSelect,
+  selected: initialSelected,
   theme,
   onToggleTheme,
   people,
   initialGroups,
 }: Props) {
-  const personIds = people.map((_, i) => personIdFor(i));
+  const personIds = people.map((p) => p.id);
+  const nameOf = (pid: string) => people.find((p) => p.id === pid)?.name ?? '';
+  const [selected, onSelect] = useState<BillingMethod | null>(initialSelected);
   const [groups, setGroups] = useState<AccountGroup[]>(initialGroups);
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState('');
@@ -107,9 +106,9 @@ export function BillingScreen({
       <TopBar onBack={onBack} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
       <div className="px-5 pb-2">
         <h2 className="font-display text-3xl font-bold text-charcoal-900 dark:text-cream-50 mb-1">
-          ¿Cómo vamos a pagar?
+          ¿Cómo van a pagar?
         </h2>
-        <p className="text-charcoal-700 dark:text-cream-200 mb-6">Elegí el método</p>
+        <p className="text-charcoal-700 dark:text-cream-200 mb-6">Elegí cómo dividir la cuenta</p>
       </div>
 
       <div className="flex-1 px-5 space-y-4 overflow-y-auto pb-40">
@@ -222,7 +221,6 @@ export function BillingScreen({
                     <div className="px-3 pb-3 space-y-2 animate-fadeIn">
                       {/* Assigned people */}
                       {g.personIds.map((pid) => {
-                        const idx = personIds.indexOf(pid);
                         return (
                           <div
                             key={pid}
@@ -232,7 +230,7 @@ export function BillingScreen({
                               <User className="w-3.5 h-3.5" />
                             </div>
                             <span className="flex-1 text-sm font-semibold text-charcoal-800 dark:text-cream-100">
-                              {people[idx]}
+                              {nameOf(pid)}
                             </span>
                             {/* Move dropdown */}
                             <select
@@ -267,7 +265,6 @@ export function BillingScreen({
                             Sin asignar
                           </p>
                           {unassigned.map((pid) => {
-                            const idx = personIds.indexOf(pid);
                             return (
                               <button
                                 key={pid}
@@ -278,7 +275,7 @@ export function BillingScreen({
                                   <User className="w-3.5 h-3.5" />
                                 </div>
                                 <span className="flex-1 text-left text-sm font-semibold text-charcoal-700 dark:text-cream-200">
-                                  {people[idx]}
+                                  {nameOf(pid)}
                                 </span>
                                 <ArrowRight className="w-4 h-4 text-terracotta-400 shrink-0" />
                               </button>
@@ -329,7 +326,7 @@ export function BillingScreen({
           onClick={() => selected && onContinue(selected, selected === 'groups' ? groups : [])}
           disabled={!canContinue}
         >
-          Continuar
+          Calcular cuánto paga cada quien
         </Button>
       </div>
     </div>

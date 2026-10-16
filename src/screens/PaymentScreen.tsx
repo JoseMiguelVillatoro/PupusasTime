@@ -1,27 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/Button';
 import { TopBar } from '@/components/TopBar';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { PupusaIcon } from '@/components/PupusaIcon';
-import { Check, Copy, ChevronLeft, User } from 'lucide-react';
+import { Check, Copy, ChevronDown, MessageCircle, Pencil } from 'lucide-react';
+import { PersonOrder, PlaceRestaurant, AccountGroup, BillingMethod, MASA_LABEL, PUPUSA_BY_ID, PupusaType } from '@/data/pupusa';
 import {
-  PersonOrder,
-  PlaceRestaurant,
-  AccountGroup,
-  BillingMethod,
-  MASA_LABEL,
-  PUPUSA_BY_ID,
-} from '@/data/pupusa';
-import {
-  consolidateOrders,
-  generatePaymentText,
+  accountsFor,
   calculatePayment,
+  consolidateExtras,
+  consolidateOrders,
   formatCurrency,
+  generatePaymentText,
+  generateShareText,
   lineCents,
-  entriesCents,
-  personIdFor,
-  PaymentResult,
+  parseMoney,
+  whatsappShareUrl,
+  type AccountBreakdown,
+  type Cents,
 } from '@/data/consolidation';
+import type { PaymentDraft } from '@/state/pupuseada';
+import { loadPrices, savePrices } from '@/state/storage';
+import { copyText } from '@/lib/clipboard';
 import { Theme } from '@/hooks/useTheme';
 
 interface Props {
@@ -29,20 +28,92 @@ interface Props {
   billing: BillingMethod;
   orders: PersonOrder[];
   groups: AccountGroup[];
-  people: string[];
+  draft: PaymentDraft;
+  onChange: (patch: Partial<PaymentDraft>) => void;
+  onBack: () => void;
+  onBackToSummary: () => void;
   theme: Theme;
   onToggleTheme: () => void;
-  onBack: () => void;
-  priceInputs: Record<string, string>;
-  setPriceInputs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  paymentStep: 'intro' | 'price' | 'tip' | 'result';
-  setPaymentStep: React.Dispatch<React.SetStateAction<'intro' | 'price' | 'tip' | 'result'>>;
-  hasTip: boolean | null;
-  setHasTip: React.Dispatch<React.SetStateAction<boolean | null>>;
-  tipInput: string;
-  setTipInput: React.Dispatch<React.SetStateAction<string>>;
-  paymentResult: PaymentResult | null;
-  setPaymentResult: React.Dispatch<React.SetStateAction<PaymentResult | null>>;
+}
+
+const TIP_PRESETS = ['10', '15'];
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+const inputClass =
+  'w-full py-3 rounded-xl bg-white dark:bg-night-200 border border-cream-300 dark:border-night-100 text-charcoal-800 dark:text-cream-100 font-bold text-base text-right tabular-nums focus:outline-none focus:border-terracotta-400 transition-colors';
+
+function MoneyInput({ id, value, onChange, label }: { id: string; value: string; onChange: (v: string) => void; label: string }) {
+  return (
+    <div className="relative">
+      <label htmlFor={id} className="sr-only">
+        {label}
+      </label>
+      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-charcoal-700 dark:text-cream-200 font-bold">$</span>
+      <input
+        id={id}
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="0.00"
+        className={`${inputClass} pl-9 pr-4`}
+      />
+    </div>
+  );
+}
+
+function AccountDetail({ a, prices }: { a: AccountBreakdown; prices: Record<string, Cents> }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-3 p-4 text-left no-tap-highlight"
+      >
+        <div className="flex-1 min-w-0">
+          <p className="font-bold text-charcoal-900 dark:text-cream-50 truncate">{a.groupName}</p>
+          <p className="text-sm text-charcoal-700 dark:text-cream-200 truncate">
+            {a.personNames.length > 1 ? `${a.personNames.join(', ')} · ` : ''}
+            {a.totalPupusas} {a.totalPupusas === 1 ? 'pupusa' : 'pupusas'}
+            {a.extras.length > 0 && ` · ${plural(a.extras.reduce((s, x) => s + x.quantity, 0), 'extra', 'extras')}`}
+          </p>
+        </div>
+        <span className="font-display text-2xl font-bold text-terracotta-600 dark:text-terracotta-300 tabular-nums">
+          {formatCurrency(a.total)}
+        </span>
+        <ChevronDown className={`w-5 h-5 text-charcoal-700 dark:text-cream-200 transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="px-4 pb-4 space-y-1.5 text-sm text-charcoal-700 dark:text-cream-200 animate-fadeIn">
+          {[...a.maiz.map((e) => ({ e, masa: MASA_LABEL.maiz })), ...a.arroz.map((e) => ({ e, masa: MASA_LABEL.arroz }))].map(({ e, masa }) => (
+            <div key={`${masa}-${e.pupusaTypeId}`} className="flex justify-between">
+              <span>
+                {e.quantity} × {e.code} · {masa}
+              </span>
+              <span className="tabular-nums">{formatCurrency(lineCents(e, prices))}</span>
+            </div>
+          ))}
+          {a.extras.map((x) => (
+            <div key={x.label} className="flex justify-between">
+              <span>
+                {x.quantity} × {x.label}
+              </span>
+              <span className="tabular-nums">{formatCurrency(x.cents)}</span>
+            </div>
+          ))}
+          <div className="flex justify-between pt-2 border-t border-cream-200 dark:border-night-100">
+            <span>Subtotal</span>
+            <span className="tabular-nums">{formatCurrency(a.subtotal)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Propina</span>
+            <span className="tabular-nums">{formatCurrency(a.tip)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function PaymentScreen({
@@ -50,319 +121,271 @@ export function PaymentScreen({
   billing,
   orders,
   groups,
-  people,
+  draft,
+  onChange,
+  onBack,
+  onBackToSummary,
   theme,
   onToggleTheme,
-  onBack,
-  priceInputs,
-  setPriceInputs,
-  paymentStep,
-  setPaymentStep,
-  hasTip,
-  setHasTip,
-  tipInput,
-  setTipInput,
-  paymentResult,
-  setPaymentResult,
 }: Props) {
   const [copied, setCopied] = useState(false);
-  const consolidated = consolidateOrders(orders);
-  const paymentGroups = billing === 'single'
-    ? [{ id: 'single-account', name: 'Cuenta única', personIds: people.map((_, index) => personIdFor(index)) }]
-    : billing === 'split'
-      ? people.map((name, index) => ({ id: `person-account-${index}`, name: name || `Persona ${index + 1}`, personIds: [personIdFor(index)] }))
-      : groups;
+  const [usedSaved, setUsedSaved] = useState(false);
 
-  const orderedTypes = Array.from(
-    new Map(
-      [...consolidated.maiz, ...consolidated.arroz].map((e) => [e.pupusaTypeId, PUPUSA_BY_ID[e.pupusaTypeId]])
-    ).values()
+  const consolidated = consolidateOrders(orders);
+  const extras = consolidateExtras(orders);
+  const extrasCents = extras.reduce((s, x) => s + x.cents, 0);
+  const accounts = useMemo(() => accountsFor(billing, orders, groups), [billing, orders, groups]);
+
+  const orderedTypes: PupusaType[] = Array.from(
+    new Map([...consolidated.maiz, ...consolidated.arroz].map((e) => [e.pupusaTypeId, PUPUSA_BY_ID[e.pupusaTypeId]])).values()
   );
 
-  const priceByType: Record<string, number> = {};
-  for (const [id, val] of Object.entries(priceInputs)) {
-    const n = parseFloat(val);
-    if (!isNaN(n) && n >= 0) priceByType[id] = n;
+  // Precios recordados de la última vez en esta pupusería.
+  useEffect(() => {
+    const nothingTyped = Object.keys(draft.priceInputs).length === 0 && !draft.uniformInput;
+    if (!nothingTyped) return;
+    const saved = loadPrices(restaurant);
+    if (!saved) return;
+    onChange({ priceInputs: saved.priceInputs, uniformPrice: saved.uniformPrice, uniformInput: saved.uniformInput });
+    setUsedSaved(true);
+    // Solo al entrar a la pantalla.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const priceCentsByType: Record<string, Cents> = {};
+  for (const t of orderedTypes) {
+    const cents = parseMoney(draft.uniformPrice ? draft.uniformInput : draft.priceInputs[t.id] ?? '');
+    if (cents !== null) priceCentsByType[t.id] = cents;
   }
-  const allPricesValid = orderedTypes.every((t) => priceByType[t.id] !== undefined && priceByType[t.id] > 0);
-  const tipPercent = hasTip ? (parseFloat(tipInput) || 0) : 0;
+  const allPricesValid = orderedTypes.every((t) => (priceCentsByType[t.id] ?? 0) > 0);
+  const tipPercent = draft.hasTip ? Number(draft.tipInput.replace(',', '.')) || 0 : 0;
+  const tipValid = draft.hasTip === false || (draft.hasTip === true && tipPercent > 0 && tipPercent <= 100);
 
-  const handlePriceContinue = () => {
-    setPaymentStep('tip');
+  const result = draft.step === 'result' ? calculatePayment(orders, accounts, priceCentsByType, tipPercent) : null;
+
+  const goToResult = () => {
+    savePrices(restaurant, {
+      priceInputs: draft.priceInputs,
+      uniformPrice: draft.uniformPrice,
+      uniformInput: draft.uniformInput,
+    });
+    onChange({ step: 'result' });
   };
 
-  const handleTipContinue = () => {
-    try {
-      const result = calculatePayment(orders, paymentGroups, people, priceByType, tipPercent);
-      setPaymentResult(result);
-      setPaymentStep('result');
-    } catch (err) {
-      console.error('calculatePayment error:', err, { orders, paymentGroups, people, priceByType, tipPercent });
-    }
-  };
-
-  const currentCopyText = paymentResult
-    ? generatePaymentText(restaurant?.name || null, paymentResult)
-    : '';
+  const restaurantName = restaurant?.name ?? null;
+  const shareText = result ? generateShareText(restaurantName, result) : '';
+  const detailText = result ? generatePaymentText(restaurantName, result) : '';
 
   const handleCopy = async () => {
-    if (!currentCopyText) return;
-    try {
-      await navigator.clipboard.writeText(currentCopyText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = currentCopyText;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    }
+    await copyText(detailText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
   };
+
+  const backAction = draft.step === 'price' ? onBack : () => onChange({ step: draft.step === 'result' ? 'tip' : 'price' });
 
   return (
     <div className="min-h-screen flex flex-col">
-      <TopBar onBack={onBack} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
-
-      <div className="px-5 pt-4 pb-2 animate-slideUp">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1 text-sm font-semibold text-charcoal-700 dark:text-cream-200 mb-3 active:scale-95 transition-transform no-tap-highlight"
-        >
-          <ChevronLeft className="w-4 h-4" /> Volver al resumen
-        </button>
-      </div>
+      <TopBar onBack={backAction} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
 
       <div className="flex-1 px-5 pt-2 space-y-6 overflow-y-auto pb-40">
-        {/* Price step */}
-        {paymentStep === 'price' && (
+        {/* Paso 1: precios */}
+        {draft.step === 'price' && (
           <div className="animate-fadeIn">
-            <p className="font-display text-lg font-bold text-charcoal-900 dark:text-cream-50 mb-1">
-              ¿Cuánto cuesta cada tipo de pupusa?
-            </p>
-            <p className="text-xs text-charcoal-700/70 dark:text-cream-200/60 mb-4">
-              Maíz y Arroz tienen el mismo precio para cada especialidad.
-            </p>
-            <div className="space-y-2.5 mb-5">
-              {orderedTypes.map((t) => (
-                <div
-                  key={t.id}
-                  className="rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 p-3.5 transition-colors focus-within:border-terracotta-300"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <span className="font-bold text-charcoal-900 dark:text-cream-50 text-sm">{t.code}</span>
-                      <span className="text-charcoal-700 dark:text-cream-200 text-sm ml-1">— {t.name}</span>
-                    </div>
-                    <span className="text-[10px] font-semibold text-charcoal-700/50 dark:text-cream-200/50 uppercase tracking-wide">
-                      Precio por pupusa
-                    </span>
-                  </div>
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-charcoal-700 dark:text-cream-200 font-bold text-base">$</span>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      min="0"
-                      value={priceInputs[t.id] || ''}
-                      onChange={(e) => setPriceInputs((prev) => ({ ...prev, [t.id]: e.target.value }))}
-                      placeholder="0.00"
-                      className="w-full pl-9 pr-4 py-3 rounded-xl bg-white dark:bg-night-200 border border-cream-200 dark:border-night-100 text-charcoal-800 dark:text-cream-100 font-bold text-base text-right tabular-nums focus:outline-none focus:border-terracotta-300 transition-colors"
+            <h2 className="font-display text-2xl font-bold text-charcoal-900 dark:text-cream-50 mb-1">¿Cuánto cuesta cada pupusa?</h2>
+            <p className="text-sm text-charcoal-700 dark:text-cream-200 mb-4">Maíz y arroz llevan el mismo precio.</p>
+
+            {usedSaved && (
+              <p className="mb-4 px-3 py-2 rounded-xl bg-olive-100 dark:bg-olive-600/25 text-olive-600 dark:text-olive-200 text-sm font-semibold">
+                Pusimos los precios de la última vez{restaurantName ? ` en ${restaurantName}` : ''}. Revisalos por si cambiaron.
+              </p>
+            )}
+
+            <label className="flex items-center justify-between gap-3 mb-4 p-4 rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 cursor-pointer">
+              <span>
+                <span className="block font-bold text-charcoal-900 dark:text-cream-50">Mismo precio para todas</span>
+                <span className="block text-sm text-charcoal-700 dark:text-cream-200">Lo más común en las pupuserías</span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={draft.uniformPrice}
+                onChange={(e) => onChange({ uniformPrice: e.target.checked })}
+                className="w-6 h-6 accent-terracotta-500 shrink-0"
+              />
+            </label>
+
+            {draft.uniformPrice ? (
+              <div className="mb-5 p-4 rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100">
+                <p className="text-sm font-bold text-charcoal-800 dark:text-cream-100 mb-2">Precio por pupusa</p>
+                <MoneyInput id="uniform-price" label="Precio por pupusa" value={draft.uniformInput} onChange={(v) => onChange({ uniformInput: v })} />
+              </div>
+            ) : (
+              <div className="space-y-2.5 mb-5">
+                {orderedTypes.map((t) => (
+                  <div key={t.id} className="rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 p-3.5">
+                    <p className="text-sm mb-2">
+                      <span className="font-bold text-charcoal-900 dark:text-cream-50">{t.code}</span>
+                      {t.code !== t.name && <span className="text-charcoal-700 dark:text-cream-200"> · {t.name}</span>}
+                    </p>
+                    <MoneyInput
+                      id={`price-${t.id}`}
+                      label={`Precio de ${t.name}`}
+                      value={draft.priceInputs[t.id] ?? ''}
+                      onChange={(v) => onChange({ priceInputs: { ...draft.priceInputs, [t.id]: v } })}
                     />
                   </div>
-                </div>
-              ))}
-            </div>
-            <Button onClick={handlePriceContinue} disabled={!allPricesValid}>
+                ))}
+              </div>
+            )}
+
+            {extras.length > 0 && (
+              <p className="mb-5 text-sm text-charcoal-700 dark:text-cream-200">
+                Las bebidas y extras ya tienen su precio: {formatCurrency(extrasCents)} en total.
+              </p>
+            )}
+
+            <Button onClick={() => onChange({ step: 'tip' })} disabled={!allPricesValid}>
               Continuar →
             </Button>
           </div>
         )}
 
-        {/* Tip step */}
-        {paymentStep === 'tip' && (
+        {/* Paso 2: propina */}
+        {draft.step === 'tip' && (
           <div className="animate-fadeIn">
-            <p className="font-display text-lg font-bold text-charcoal-900 dark:text-cream-50 mb-3">
-              ¿Hay propina?
-            </p>
+            <h2 className="font-display text-2xl font-bold text-charcoal-900 dark:text-cream-50 mb-3">¿Dejamos propina?</h2>
             <div className="grid grid-cols-2 gap-3 mb-4">
-              <button
-                onClick={() => setHasTip(false)}
-                className={`py-4 rounded-2xl font-bold text-lg transition-all active:scale-95 no-tap-highlight ${
-                  hasTip === false
-                    ? 'bg-terracotta-400 text-white shadow-pop'
-                    : 'bg-cream-200 dark:bg-night-100 text-charcoal-800 dark:text-cream-100'
-                }`}
-              >
-                No
-              </button>
-              <button
-                onClick={() => setHasTip(true)}
-                className={`py-4 rounded-2xl font-bold text-lg transition-all active:scale-95 no-tap-highlight ${
-                  hasTip === true
-                    ? 'bg-terracotta-400 text-white shadow-pop'
-                    : 'bg-cream-200 dark:bg-night-100 text-charcoal-800 dark:text-cream-100'
-                }`}
-              >
-                Sí
-              </button>
+              {[
+                { v: false, label: 'No' },
+                { v: true, label: 'Sí' },
+              ].map((o) => (
+                <button
+                  key={o.label}
+                  onClick={() => onChange({ hasTip: o.v, tipInput: o.v && !draft.tipInput ? '10' : draft.tipInput })}
+                  aria-pressed={draft.hasTip === o.v}
+                  className={`py-4 rounded-2xl font-bold text-lg transition-all active:scale-95 no-tap-highlight ${
+                    draft.hasTip === o.v ? 'bg-terracotta-500 text-white shadow-pop' : 'bg-cream-200 dark:bg-night-100 text-charcoal-800 dark:text-cream-100'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
             </div>
-            {hasTip && (
+            {draft.hasTip && (
               <div className="animate-fadeIn mb-4">
-                <p className="text-sm font-semibold text-charcoal-700 dark:text-cream-200 mb-2">
-                  ¿Cuánto es la propina?
-                </p>
+                <div className="flex gap-2 mb-3">
+                  {TIP_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => onChange({ tipInput: p })}
+                      aria-pressed={draft.tipInput === p}
+                      className={`flex-1 min-h-[44px] rounded-xl font-bold no-tap-highlight ${
+                        draft.tipInput === p ? 'bg-terracotta-100 dark:bg-terracotta-700/40 text-terracotta-700 dark:text-terracotta-100 ring-2 ring-terracotta-400' : 'bg-cream-200 dark:bg-night-100 text-charcoal-800 dark:text-cream-100'
+                      }`}
+                    >
+                      {p}%
+                    </button>
+                  ))}
+                </div>
+                <label htmlFor="tip" className="block text-sm font-semibold text-charcoal-700 dark:text-cream-200 mb-2">
+                  Otro porcentaje
+                </label>
                 <div className="relative">
                   <input
-                    type="number"
+                    id="tip"
                     inputMode="decimal"
-                    step="1"
-                    min="0"
-                    value={tipInput}
-                    onChange={(e) => setTipInput(e.target.value)}
+                    value={draft.tipInput}
+                    onChange={(e) => onChange({ tipInput: e.target.value })}
                     placeholder="10"
-                    className="w-full pl-4 pr-10 py-4 rounded-2xl bg-white dark:bg-night-200 border border-cream-200 dark:border-night-100 text-charcoal-800 dark:text-cream-100 font-bold text-lg text-right tabular-nums focus:outline-none focus:border-terracotta-300 transition-colors"
+                    className={`${inputClass} pl-4 pr-10 py-4 text-lg`}
                   />
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-charcoal-700 dark:text-cream-200 font-bold text-lg">%</span>
                 </div>
               </div>
             )}
-            <Button
-              onClick={handleTipContinue}
-              disabled={hasTip === null || (hasTip && tipPercent <= 0)}
-            >
+            <Button onClick={goToResult} disabled={!tipValid}>
               Calcular →
             </Button>
           </div>
         )}
 
-        {/* Result step */}
-        {paymentStep === 'result' && paymentResult && (
-          <div className="animate-fadeIn">
-            {paymentResult.accounts.map((a) => (
-              <div
-                key={a.groupId}
-                className="mb-4 pb-4 border-b border-cream-200 dark:border-night-100 last:border-0 last:pb-0 last:mb-0"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <p className="font-bold text-charcoal-900 dark:text-cream-50">{a.groupName}</p>
-                  <span className="text-xs font-bold text-charcoal-700/60 dark:text-cream-200/50 bg-cream-200 dark:bg-night-100 px-2 py-1 rounded-full">
-                    {a.personNames.length} {a.personNames.length === 1 ? 'persona' : 'personas'}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {a.personNames.map((name, ni) => (
-                    <span
-                      key={ni}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-olive-100 dark:bg-olive-600/25 text-olive-600 dark:text-olive-200 text-sm font-semibold"
-                    >
-                      <User className="w-3 h-3" />
-                      {name}
-                    </span>
-                  ))}
-                </div>
-                <div className="flex items-center gap-1.5 mb-3 text-sm font-bold text-charcoal-800 dark:text-cream-100">
-                  <PupusaIcon type="fq" className="w-5 h-5" />
-                  {a.totalPupusas} pupusas
-                </div>
-                {a.maiz.length > 0 && (
-                  <div className="mb-2">
-                    <p className="text-sm font-semibold text-charcoal-700 dark:text-cream-200 mb-1">
-                      🌽 {MASA_LABEL.maiz} · {a.maiz.reduce((s, e) => s + e.quantity, 0)}
-                    </p>
-                    <div className="space-y-1 pl-1">
-                      {a.maiz.map((e) => (
-                        <div key={e.pupusaTypeId} className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
-                          <span>{e.code} × {e.quantity}</span>
-                          <span className="font-bold tabular-nums">{formatCurrency(lineCents(e, paymentResult.priceCentsByType))}</span>
-                        </div>
-                      ))}
-                      <div className="flex items-center justify-between text-sm font-bold text-charcoal-800 dark:text-cream-100 pt-1">
-                        <span>Total Maíz</span>
-                        <span className="tabular-nums">{formatCurrency(entriesCents(a.maiz, paymentResult.priceCentsByType))}</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {a.arroz.length > 0 && (
-                  <div className="mb-2">
-                    <p className="text-sm font-semibold text-charcoal-700 dark:text-cream-200 mb-1">
-                      🍚 {MASA_LABEL.arroz} · {a.arroz.reduce((s, e) => s + e.quantity, 0)}
-                    </p>
-                    <div className="space-y-1 pl-1">
-                      {a.arroz.map((e) => (
-                        <div key={e.pupusaTypeId} className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
-                          <span>{e.code} × {e.quantity}</span>
-                          <span className="font-bold tabular-nums">{formatCurrency(lineCents(e, paymentResult.priceCentsByType))}</span>
-                        </div>
-                      ))}
-                      <div className="flex items-center justify-between text-sm font-bold text-charcoal-800 dark:text-cream-100 pt-1">
-                        <span>Total Arroz</span>
-                        <span className="tabular-nums">{formatCurrency(entriesCents(a.arroz, paymentResult.priceCentsByType))}</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <div className="mt-3 pt-3 border-t border-cream-200 dark:border-night-100 space-y-1.5">
-                  <div className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
-                    <span>Subtotal de la cuenta</span>
-                    <span className="font-bold tabular-nums">{formatCurrency(a.subtotal)}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
-                    <span>Propina</span>
-                    <span className="font-bold tabular-nums">{formatCurrency(a.tip)}</span>
-                  </div>
-                  <div className="flex items-center justify-between mt-1.5 pt-2 border-t border-cream-200 dark:border-night-100">
-                    <span className="text-base font-extrabold text-charcoal-900 dark:text-cream-50">TOTAL DE LA CUENTA</span>
-                    <span className="text-xl font-extrabold text-terracotta-500 tabular-nums">{formatCurrency(a.total)}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {/* General summary */}
-            <div className="mt-5 rounded-2xl bg-terracotta-50 dark:bg-terracotta-700/20 border-2 border-terracotta-200 dark:border-terracotta-600/30 p-4">
-              <p className="font-display text-lg font-bold text-charcoal-900 dark:text-cream-50 mb-3">
-                Resumen de pago
-              </p>
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
-                  <span>Subtotal</span>
-                  <span className="font-bold tabular-nums">{formatCurrency(paymentResult.generalSubtotal)}</span>
-                </div>
-                <div className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
-                  <span>Propina{tipPercent > 0 ? ` (${tipPercent}%)` : ''}</span>
-                  <span className="font-bold tabular-nums">{formatCurrency(paymentResult.generalTip)}</span>
-                </div>
-              </div>
-              <div className="mt-3 pt-3 border-t-2 border-terracotta-300 dark:border-terracotta-600/40 flex items-center justify-between">
-                <span className="text-lg font-extrabold text-charcoal-900 dark:text-cream-50">TOTAL</span>
-                <span className="text-2xl font-extrabold text-terracotta-500 tabular-nums">{formatCurrency(paymentResult.generalTotal)}</span>
+        {/* Paso 3: resultado */}
+        {draft.step === 'result' && result && (
+          <div className="animate-fadeIn space-y-5">
+            <div>
+              <h2 className="font-display text-2xl font-bold text-charcoal-900 dark:text-cream-50">¿Cuánto paga cada quien?</h2>
+              <div className="flex flex-wrap gap-2 mt-3">
+                <button
+                  onClick={() => onChange({ step: 'price' })}
+                  className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-full bg-white dark:bg-night-300 border border-cream-200 dark:border-night-100 text-sm font-bold text-charcoal-800 dark:text-cream-100 no-tap-highlight"
+                >
+                  {draft.uniformPrice ? `${formatCurrency(priceCentsByType[orderedTypes[0]?.id] ?? 0)} todas` : 'Precios por especialidad'}
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => onChange({ step: 'tip' })}
+                  className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-full bg-white dark:bg-night-300 border border-cream-200 dark:border-night-100 text-sm font-bold text-charcoal-800 dark:text-cream-100 no-tap-highlight"
+                >
+                  {result.generalTip > 0 ? `Propina ${result.tipPercent}%` : 'Sin propina'}
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
+
+            <div className="space-y-2.5">
+              {result.accounts.map((a) => (
+                <AccountDetail key={a.groupId} a={a} prices={result.priceCentsByType} />
+              ))}
+            </div>
+
+            <div className="rounded-2xl bg-terracotta-50 dark:bg-terracotta-700/20 border-2 border-terracotta-200 dark:border-terracotta-600/30 p-5 space-y-1.5">
+              <div className="flex justify-between text-sm text-charcoal-800 dark:text-cream-100">
+                <span>
+                  {plural(consolidated.total, 'pupusa', 'pupusas')}{extras.length > 0 ? ` y ${plural(extras.reduce((s, x) => s + x.quantity, 0), 'extra', 'extras')}` : ''}
+                </span>
+                <span className="font-bold tabular-nums">{formatCurrency(result.generalSubtotal)}</span>
+              </div>
+              <div className="flex justify-between text-sm text-charcoal-800 dark:text-cream-100">
+                <span>Propina{result.tipPercent > 0 ? ` ${result.tipPercent}%` : ''}</span>
+                <span className="font-bold tabular-nums">{formatCurrency(result.generalTip)}</span>
+              </div>
+              <div className="flex justify-between items-baseline pt-2 border-t border-terracotta-200 dark:border-terracotta-600/30">
+                <span className="font-bold text-charcoal-900 dark:text-cream-50">Total de la mesa</span>
+                <span className="font-display text-3xl font-bold text-terracotta-600 dark:text-terracotta-300 tabular-nums">
+                  {formatCurrency(result.generalTotal)}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2.5">
+              <a
+                href={whatsappShareUrl(shareText)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold py-4 text-lg bg-olive-600 text-white hover:bg-olive-500 active:scale-[0.98] transition-all no-tap-highlight"
+              >
+                <MessageCircle className="w-5 h-5" /> Compartir por WhatsApp
+              </a>
+              <div className="grid grid-cols-2 gap-2.5">
+                <Button variant="secondary" onClick={handleCopy} className="!py-3 !text-base">
+                  <span className="inline-flex items-center gap-2">
+                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    {copied ? '¡Copiado!' : 'Copiar desglose'}
+                  </span>
+                </Button>
+                <Button variant="secondary" onClick={onBackToSummary} className="!py-3 !text-base">
+                  Volver al pedido
+                </Button>
+              </div>
+            </div>
+
+            <p className="text-xs text-charcoal-700 dark:text-cream-200 text-center">
+              Los totales se calculan en centavos exactos; la propina se reparte según lo que consumió cada cuenta.
+            </p>
           </div>
         )}
       </div>
-
-      {paymentStep === 'result' && paymentResult && (
-        <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-cream-100/95 dark:bg-night-400/95 backdrop-blur-md px-5 py-4 safe-bottom border-t border-cream-200 dark:border-night-100 space-y-2">
-          <Button onClick={handleCopy}>
-            {copied ? (
-              <span className="flex items-center justify-center gap-2">
-                <Check className="w-5 h-5" strokeWidth={3} /> ¡Copiado!
-              </span>
-            ) : (
-              <span className="flex items-center justify-center gap-2">
-                <Copy className="w-5 h-5" /> Copiar pago
-              </span>
-            )}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

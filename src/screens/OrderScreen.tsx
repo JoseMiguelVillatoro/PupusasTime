@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Search, X } from 'lucide-react';
+import { Search, X, Plus, Minus } from 'lucide-react';
 
 function normalize(s: string): string {
   return s
@@ -19,9 +19,11 @@ import {
   PupusaItem,
   MasaType,
   PersonOrder,
+  ExtraItem,
   MASA_EMOJI,
 } from '@/data/pupusa';
-import { consolidateOrders } from '@/data/consolidation';
+import { consolidateOrders, formatCurrency, parseMoney } from '@/data/consolidation';
+import { newId } from '@/state/pupuseada';
 import { Theme } from '@/hooks/useTheme';
 import type { PupusaType } from '@/data/pupusa';
 
@@ -30,14 +32,16 @@ const POPULAR_PUPUSA_IDS = ['revuelta', 'fq', 'queso', 'ql', 'chicharron'] as co
 interface Props {
   personIndex: number;
   totalPeople: number;
-  personName: string;
-  initialItems: PupusaItem[];
+  person: PersonOrder;
   allOrders: PersonOrder[];
+  editingFromFinal: boolean;
   onBack: () => void;
-  onComplete: (items: PupusaItem[]) => void;
+  onComplete: (items: PupusaItem[], extras: ExtraItem[]) => void;
   theme: Theme;
   onToggleTheme: () => void;
 }
+
+const QUICK_EXTRAS = ['Horchata', 'Café', 'Chocolate', 'Gaseosa', 'Agua'];
 
 interface DraftRow {
   pupusaTypeId: string;
@@ -83,16 +87,44 @@ function draftToItems(draft: DraftRow[]): PupusaItem[] {
 export function OrderScreen({
   personIndex,
   totalPeople,
-  personName,
-  initialItems,
+  person,
   allOrders,
+  editingFromFinal,
   onBack,
   onComplete,
   theme,
   onToggleTheme,
 }: Props) {
-  const [draft, setDraft] = useState<DraftRow[]>(() => itemsToDraft(initialItems));
+  const personName = person.name;
+  const [draft, setDraft] = useState<DraftRow[]>(() => itemsToDraft(person.items));
+  const [extras, setExtras] = useState<ExtraItem[]>(() => person.extras ?? []);
+  const [extraLabel, setExtraLabel] = useState('');
+  const [extraPrice, setExtraPrice] = useState('');
   const [query, setQuery] = useState('');
+
+  const extraPriceCents = parseMoney(extraPrice);
+  const canAddExtra = extraLabel.trim().length > 0 && extraPriceCents !== null && extraPriceCents > 0;
+
+  const addExtra = () => {
+    if (!canAddExtra || extraPriceCents === null) return;
+    const label = extraLabel.trim();
+    setExtras((prev) => {
+      const same = prev.find((x) => x.label.toLowerCase() === label.toLowerCase() && x.priceCents === extraPriceCents);
+      if (same) return prev.map((x) => (x === same ? { ...x, quantity: x.quantity + 1 } : x));
+      return [...prev, { id: newId(), label, priceCents: extraPriceCents, quantity: 1 }];
+    });
+    setExtraLabel('');
+    setExtraPrice('');
+  };
+
+  const setExtraQty = (id: string, delta: number) =>
+    setExtras((prev) =>
+      prev
+        .map((x) => (x.id === id ? { ...x, quantity: x.quantity + delta } : x))
+        .filter((x) => x.quantity > 0)
+    );
+
+  const extrasTotal = extras.reduce((s, x) => s + x.quantity, 0);
 
   const setQty = (typeId: string, masa: MasaType, delta: number) => {
     setDraft((prev) =>
@@ -106,10 +138,10 @@ export function OrderScreen({
 
   const myTotal = draft.reduce((sum, r) => sum + r.maiz + r.arroz, 0);
 
-  const completedOrders = allOrders.filter((_, i) => i < personIndex);
+  const otherOrders = allOrders.filter((o) => o.id !== person.id);
   const myItems = draftToItems(draft);
-  const myOrder: PersonOrder = { id: 'preview', name: personName, items: myItems };
-  const grandTotal = consolidateOrders([...completedOrders, myOrder]).total;
+  const myOrder: PersonOrder = { id: person.id, name: personName, items: myItems };
+  const grandTotal = consolidateOrders([...otherOrders, myOrder]).total;
 
   // Search filtering — accent-insensitive, matches name, code, or description
   const searchResults = useMemo(() => {
@@ -154,9 +186,9 @@ export function OrderScreen({
       <ProgressBar step={personIndex + 1} total={totalPeople} label="Personas" />
 
       <div className="px-5 pt-4 pb-2">
-        <p className="text-charcoal-700 dark:text-cream-200 font-semibold text-sm">Ahora pide</p>
+        <p className="text-charcoal-700 dark:text-cream-200 font-semibold text-sm">Le toca a</p>
         <h2 className="font-display text-3xl font-bold text-charcoal-900 dark:text-cream-50">{personName}</h2>
-        <p className="text-charcoal-700 dark:text-cream-200 mt-1 mb-3">¿Qué quieres?</p>
+        <p className="text-charcoal-700 dark:text-cream-200 mt-1 mb-3">¿Qué vas a pedir?</p>
 
         {/* Search */}
         <div className="relative mb-3">
@@ -184,6 +216,7 @@ export function OrderScreen({
         <div className="rounded-2xl bg-terracotta-50 dark:bg-terracotta-700/20 border border-terracotta-200 dark:border-terracotta-600/30 p-3 h-[3.75rem] flex items-center gap-2 overflow-hidden">
           <span className="text-sm font-bold text-terracotta-600 dark:text-terracotta-200 flex items-center gap-1 shrink-0">
             🫓 {myTotal > 0 ? `Tu pedido · ${myTotal}` : 'Tu pedido'}
+            {extrasTotal > 0 && ` + ${extrasTotal} ${extrasTotal === 1 ? 'extra' : 'extras'}`}
           </span>
           {mySelectedItems.length > 0 && (
             <div className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0">
@@ -228,66 +261,51 @@ export function OrderScreen({
                   <p className="font-bold text-charcoal-900 dark:text-cream-50 leading-tight">
                     {type.code}
                   </p>
-                  <p className="text-xs text-charcoal-700/70 dark:text-cream-200/60 truncate">{type.name}</p>
+                  {type.name !== type.code && (
+                    <p className="text-xs text-charcoal-700 dark:text-cream-200 truncate">{type.name}</p>
+                  )}
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                {/* Maíz control */}
-                <div className="flex-1 min-w-0 flex items-center justify-between bg-cream-100 dark:bg-night-200 rounded-xl px-2 py-2">
-                  <span className="text-sm font-semibold text-charcoal-800 dark:text-cream-100 flex items-center gap-1 shrink-0">
-                    🌽 <span className="hidden xs:inline sm:inline">Maíz</span>
-                  </span>
-                  <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                    <button
-                      onClick={() => setQty(type.id, 'maiz', -1)}
-                      disabled={row.maiz <= 0}
-                      className="w-8 h-8 rounded-full bg-cream-200 dark:bg-night-100 flex items-center justify-center text-charcoal-800 dark:text-cream-100 font-bold active:scale-90 transition-transform disabled:opacity-30 no-tap-highlight"
+              <div className="grid grid-cols-2 gap-2">
+                {(['maiz', 'arroz'] as const).map((masa) => {
+                  const qty = row[masa];
+                  const label = masa === 'maiz' ? 'Maíz' : 'Arroz';
+                  return (
+                    <div
+                      key={masa}
+                      className={`min-w-0 flex items-center justify-between rounded-xl pl-3 pr-1.5 py-1.5 ${
+                        qty > 0 ? 'bg-white dark:bg-night-200 ring-1 ring-terracotta-300 dark:ring-terracotta-500/50' : 'bg-cream-100 dark:bg-night-200'
+                      }`}
                     >
-                      −
-                    </button>
-                    <span
-                      key={row.maiz}
-                      className="w-5 text-center font-extrabold tabular-nums animate-pop text-charcoal-900 dark:text-cream-50"
-                    >
-                      {row.maiz}
-                    </span>
-                    <button
-                      onClick={() => setQty(type.id, 'maiz', 1)}
-                      className="w-8 h-8 rounded-full bg-terracotta-400 text-white flex items-center justify-center font-bold active:scale-90 transition-transform hover:bg-terracotta-500 no-tap-highlight"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-
-                {/* Arroz control */}
-                <div className="flex-1 min-w-0 flex items-center justify-between bg-cream-100 dark:bg-night-200 rounded-xl px-2 py-2">
-                  <span className="text-sm font-semibold text-charcoal-800 dark:text-cream-100 flex items-center gap-1 shrink-0">
-                    🍚 <span className="hidden xs:inline sm:inline">Arroz</span>
-                  </span>
-                  <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                    <button
-                      onClick={() => setQty(type.id, 'arroz', -1)}
-                      disabled={row.arroz <= 0}
-                      className="w-8 h-8 rounded-full bg-cream-200 dark:bg-night-100 flex items-center justify-center text-charcoal-800 dark:text-cream-100 font-bold active:scale-90 transition-transform disabled:opacity-30 no-tap-highlight"
-                    >
-                      −
-                    </button>
-                    <span
-                      key={row.arroz}
-                      className="w-5 text-center font-extrabold tabular-nums animate-pop text-charcoal-900 dark:text-cream-50"
-                    >
-                      {row.arroz}
-                    </span>
-                    <button
-                      onClick={() => setQty(type.id, 'arroz', 1)}
-                      className="w-8 h-8 rounded-full bg-terracotta-400 text-white flex items-center justify-center font-bold active:scale-90 transition-transform hover:bg-terracotta-500 no-tap-highlight"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
+                      <span className="text-sm font-bold text-charcoal-800 dark:text-cream-100">{label}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => setQty(type.id, masa, -1)}
+                          disabled={qty <= 0}
+                          className="w-9 h-9 rounded-full bg-cream-50 dark:bg-night-100 border border-cream-300 dark:border-night-50 flex items-center justify-center text-charcoal-800 dark:text-cream-100 active:scale-90 transition-transform disabled:opacity-40 no-tap-highlight"
+                          aria-label={`Quitar una ${type.name} de ${label.toLowerCase()}`}
+                        >
+                          <Minus className="w-4 h-4" strokeWidth={3} />
+                        </button>
+                        <span
+                          key={qty}
+                          className="w-5 text-center font-extrabold tabular-nums animate-pop text-charcoal-900 dark:text-cream-50"
+                          aria-live="polite"
+                        >
+                          {qty}
+                        </span>
+                        <button
+                          onClick={() => setQty(type.id, masa, 1)}
+                          className="w-9 h-9 rounded-full bg-terracotta-500 text-white flex items-center justify-center active:scale-90 transition-transform hover:bg-terracotta-600 no-tap-highlight"
+                          aria-label={`Agregar una ${type.name} de ${label.toLowerCase()}`}
+                        >
+                          <Plus className="w-4 h-4" strokeWidth={3} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -300,16 +318,105 @@ export function OrderScreen({
             <p className="text-charcoal-700/60 dark:text-cream-200/50 text-sm mt-1">Probá con otro nombre o abreviatura</p>
           </div>
         )}
+
+        {!searchResults && (
+          <section aria-labelledby="extras-title" className="pt-4">
+            <h3 id="extras-title" className="font-display text-xl font-bold text-charcoal-900 dark:text-cream-50 mb-1">
+              Bebidas y extras
+            </h3>
+            <p className="text-sm text-charcoal-700 dark:text-cream-200 mb-3">Para que el total cuadre con la cuenta de la mesera.</p>
+
+            {extras.length > 0 && (
+              <div className="rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 divide-y divide-cream-200 dark:divide-night-100 mb-3">
+                {extras.map((x) => (
+                  <div key={x.id} className="flex items-center gap-2 pl-4 pr-2 py-2">
+                    <span className="flex-1 min-w-0 font-bold text-charcoal-900 dark:text-cream-50 truncate">{x.label}</span>
+                    <span className="text-sm font-semibold text-charcoal-700 dark:text-cream-200 tabular-nums">{formatCurrency(x.priceCents)}</span>
+                    <button
+                      onClick={() => setExtraQty(x.id, -1)}
+                      className="w-9 h-9 rounded-full bg-cream-100 dark:bg-night-100 border border-cream-300 dark:border-night-50 flex items-center justify-center text-charcoal-800 dark:text-cream-100 active:scale-90 transition-transform no-tap-highlight"
+                      aria-label={`Quitar un ${x.label}`}
+                    >
+                      <Minus className="w-4 h-4" strokeWidth={3} />
+                    </button>
+                    <span className="w-5 text-center font-extrabold tabular-nums text-charcoal-900 dark:text-cream-50">{x.quantity}</span>
+                    <button
+                      onClick={() => setExtraQty(x.id, 1)}
+                      className="w-9 h-9 rounded-full bg-terracotta-500 text-white flex items-center justify-center active:scale-90 transition-transform hover:bg-terracotta-600 no-tap-highlight"
+                      aria-label={`Agregar un ${x.label}`}
+                    >
+                      <Plus className="w-4 h-4" strokeWidth={3} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2 mb-3">
+              {QUICK_EXTRAS.map((label) => (
+                <button
+                  key={label}
+                  onClick={() => setExtraLabel(label)}
+                  className={`px-3 py-2 rounded-full text-sm font-bold transition-colors no-tap-highlight ${
+                    extraLabel === label
+                      ? 'bg-terracotta-500 text-white'
+                      : 'bg-cream-200 dark:bg-night-100 text-charcoal-800 dark:text-cream-100 hover:bg-cream-300 dark:hover:bg-night-50'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                addExtra();
+              }}
+            >
+              <label className="sr-only" htmlFor="extra-label">Bebida o extra</label>
+              <input
+                id="extra-label"
+                value={extraLabel}
+                onChange={(e) => setExtraLabel(e.target.value)}
+                placeholder="Otra bebida o extra"
+                maxLength={40}
+                className="flex-1 min-w-0 px-4 py-3 rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 text-charcoal-800 dark:text-cream-100 placeholder:text-charcoal-700/50 dark:placeholder:text-cream-200/40 focus:outline-none focus:border-terracotta-300 transition-colors text-sm"
+              />
+              <label className="sr-only" htmlFor="extra-price">Precio</label>
+              <div className="relative w-24 shrink-0">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-charcoal-700 dark:text-cream-200 font-bold text-sm">$</span>
+                <input
+                  id="extra-price"
+                  value={extraPrice}
+                  onChange={(e) => setExtraPrice(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  className="w-full pl-7 pr-3 py-3 rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 text-charcoal-800 dark:text-cream-100 placeholder:text-charcoal-700/50 dark:placeholder:text-cream-200/40 focus:outline-none focus:border-terracotta-300 transition-colors text-sm text-right tabular-nums"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={!canAddExtra}
+                className="w-12 rounded-2xl bg-terracotta-500 text-white flex items-center justify-center active:scale-95 transition-transform disabled:opacity-40 no-tap-highlight shrink-0"
+                aria-label="Agregar bebida o extra"
+              >
+                <Plus className="w-5 h-5" strokeWidth={3} />
+              </button>
+            </form>
+          </section>
+        )}
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-cream-100/95 dark:bg-night-400/95 backdrop-blur-md px-5 py-4 safe-bottom border-t border-cream-200 dark:border-night-100">
         <div className="flex items-center justify-between mb-3">
           <span className="font-bold text-charcoal-900 dark:text-cream-50">
-            {personName}: <span className="text-terracotta-500">{myTotal} pupusas</span>
+            {personName}: <span className="text-terracotta-600 dark:text-terracotta-300">{myTotal} {myTotal === 1 ? 'pupusa' : 'pupusas'}</span>
+            {extrasTotal > 0 && <span className="text-charcoal-700 dark:text-cream-200 font-semibold"> · {extrasTotal} {extrasTotal === 1 ? 'extra' : 'extras'}</span>}
           </span>
         </div>
-        <Button onClick={() => onComplete(myItems)} disabled={myTotal === 0}>
-          {personIndex + 1 < totalPeople ? 'Continuar' : 'Finalizar pedido'}
+        <Button onClick={() => onComplete(myItems, extras)} disabled={myTotal === 0 && extrasTotal === 0}>
+          {editingFromFinal ? 'Guardar pedido' : personIndex + 1 < totalPeople ? 'Continuar' : 'Finalizar pedido'}
         </Button>
       </div>
     </div>
