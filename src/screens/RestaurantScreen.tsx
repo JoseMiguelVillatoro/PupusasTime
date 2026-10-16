@@ -26,6 +26,9 @@ interface Props {
   selected: PlaceRestaurant | null;
 }
 
+/** Vercel Function del mismo repo (api/places-search.ts), en el mismo dominio. */
+const PLACES_ENDPOINT = '/api/places-search';
+
 type LocationState = 'idle' | 'requesting' | 'granted' | 'denied';
 type ViewMode = 'list' | 'detail';
 
@@ -133,17 +136,11 @@ export function RestaurantScreen({
     setError(null);
     setNeedsConfig(false);
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
       const res = await fetch(
-        `${supabaseUrl}/functions/v1/places-search?action=nearby`,
+        `${PLACES_ENDPOINT}?action=nearby`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${supabaseKey}`,
-            apikey: supabaseKey,
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ lat: coords.lat, lng: coords.lng, radius: 8000 }),
         }
       );
@@ -184,17 +181,11 @@ export function RestaurantScreen({
       setError(null);
       setNeedsConfig(false);
       try {
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-        const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
         const res = await fetch(
-          `${supabaseUrl}/functions/v1/places-search?action=search`,
+          `${PLACES_ENDPOINT}?action=search`,
           {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${supabaseKey}`,
-              apikey: supabaseKey,
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               query: searchQuery,
               lat: coords?.lat,
@@ -475,7 +466,7 @@ export function RestaurantScreen({
             <p className="text-sm text-charcoal-700 dark:text-cream-200">
               Para activar la búsqueda de pupuserías reales, agregá la variable{' '}
               <code className="text-terracotta-500 font-semibold">GOOGLE_PLACES_API_KEY</code>{' '}
-              en la configuración de Supabase Edge Functions.
+              en las variables de entorno del proyecto en Vercel.
             </p>
           </div>
         )}

@@ -1,12 +1,14 @@
-// Proxy hacia Google Places (New) para buscar pupuserías.
-// La API key vive solo aquí. Como la función es pública (verify_jwt = false),
-// se protege con: lista de orígenes permitidos, rate limit por IP, caché de
-// respuestas, validación de entrada y un field mask mínimo (menos costo por request).
+// Vercel Function: proxy hacia Google Places (New) para buscar pupuserías.
+// Se sirve en /api/places-search, en el mismo dominio que la app.
 //
-// Variables de entorno:
+// La API key vive solo aquí. Como la función es pública, se protege con: lista
+// de orígenes permitidos, rate limit por IP, caché de respuestas, validación de
+// entrada y un field mask mínimo (menos costo por request).
+//
+// Variables de entorno (Vercel → Settings → Environment Variables):
 //   GOOGLE_PLACES_API_KEY  (obligatoria)
 //   ALLOWED_ORIGINS        (opcional) lista separada por comas, ej:
-//                          "https://pupusastime.com,http://localhost:5173"
+//                          "https://pupusas-time.vercel.app,http://localhost:3000"
 //                          Si no se define, se acepta cualquier origen.
 
 interface PlaceResult {
@@ -53,7 +55,7 @@ const RATE_LIMIT_PER_MINUTE = 30;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_QUERY_LENGTH = 80;
 
-const allowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
@@ -135,7 +137,7 @@ function parseCoord(v: unknown, min: number, max: number): number | undefined {
   return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
 }
 
-Deno.serve(async (req: Request) => {
+export async function handlePlacesRequest(req: Request): Promise<Response> {
   const origin = req.headers.get("Origin");
 
   if (allowedOrigins.length > 0 && (!origin || !allowedOrigins.includes(origin))) {
@@ -144,12 +146,13 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
   if (req.method !== "POST") return json(405, { error: "Método no permitido" }, origin);
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
+  const ip =
+    req.headers.get("x-real-ip") || req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
   if (isRateLimited(ip)) {
     return json(429, { error: "Demasiadas búsquedas, esperá un momento" }, origin, { "Retry-After": "60" });
   }
 
-  const apiKey = Deno.env.get("GOOGLE_PLACES_API_KEY");
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) return json(503, { error: "Búsqueda no configurada", needsConfig: true }, origin);
 
   try {
@@ -228,4 +231,6 @@ Deno.serve(async (req: Request) => {
     console.error("places-search error:", err);
     return json(500, { error: "Error inesperado" }, origin);
   }
-});
+}
+
+export default { fetch: handlePlacesRequest };

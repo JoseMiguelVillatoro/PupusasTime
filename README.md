@@ -24,43 +24,41 @@ Todo se guarda en `localStorage`, sin cuentas ni servidor:
 ## Stack
 
 - React 18 + TypeScript + Vite + Tailwind CSS
-- Supabase Edge Function (`supabase/functions/places-search`) como proxy a Google Places
+- Vercel: hosting y una Vercel Function (`api/places-search.ts`) como proxy a Google Places
 - Vitest para la lógica de pedidos y pagos
+
+Todo vive en este repo: no depende de Bolt ni de Supabase.
 
 ## Desarrollo
 
 ```bash
 npm install
-cp .env.example .env   # y completá las variables
-npm run dev
+npm run dev            # la app, sin búsqueda de pupuserías (se puede escribir el nombre a mano)
+npx vercel dev         # la app + /api/places-search, leyendo .env (copiá .env.example)
 ```
 
 | Script              | Qué hace                         |
 | ------------------- | -------------------------------- |
 | `npm run dev`       | Servidor de desarrollo           |
-| `npm test`          | Tests de lógica (Vitest)         |
-| `npm run typecheck` | Chequeo de tipos                 |
+| `npm test`          | Tests (Vitest)                   |
+| `npm run typecheck` | Chequeo de tipos (app y api)     |
 | `npm run lint`      | ESLint                           |
 | `npm run build`     | Build de producción en `dist/`   |
 
-### Variables del frontend (`.env`)
+## Despliegue en Vercel
 
-```
-VITE_SUPABASE_URL=https://<tu-proyecto>.supabase.co
-VITE_SUPABASE_ANON_KEY=<anon key>
-```
+Cada push a `main` despliega a producción; cada rama o PR genera una vista previa.
 
-### Edge Function `places-search`
+Variables de entorno del proyecto en Vercel (*Settings → Environment Variables*), para Production y Preview:
 
-Secrets en Supabase:
+| Variable                | Obligatoria | Para qué |
+| ----------------------- | ----------- | -------- |
+| `GOOGLE_PLACES_API_KEY` | Sí          | Buscar pupuserías con Google Places |
+| `ALLOWED_ORIGINS`       | No          | Dominios que pueden usar la búsqueda, separados por comas. Sin ella, se acepta cualquiera. |
 
-```bash
-supabase secrets set GOOGLE_PLACES_API_KEY=<key>
-supabase secrets set ALLOWED_ORIGINS=https://tu-dominio.com,http://localhost:5173
-supabase functions deploy places-search
-```
+Después de agregarlas o cambiarlas, hay que volver a desplegar.
 
-La función es pública (`verify_jwt = false`), así que se protege con lista de
+La función `/api/places-search` es pública, así que se protege con lista de
 orígenes, rate limit por IP, caché de 10 minutos y validación de entrada. Para
 blindar el costo, en Google Cloud también conviene:
 
