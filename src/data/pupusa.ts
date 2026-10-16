@@ -16,7 +16,6 @@ export type PupusaTypeId =
   | 'qespinaca'
   | 'fqloroco'
   | 'chicharronloroco'
-  | 'qayote'
   | 'fqchip'
   | 'camaron'
   | 'frijolchorizo'
@@ -50,12 +49,6 @@ export interface PersonOrder {
   items: PupusaItem[];
 }
 
-export interface Restaurant {
-  id: string;
-  name: string;
-  location: string;
-}
-
 export interface PlaceLocation {
   lat: number;
   lng: number;
@@ -73,18 +66,6 @@ export interface PlaceRestaurant {
   hours?: string;
   location?: PlaceLocation;
   placeId: string;
-  photoUrl?: string;
-}
-
-export type RestaurantData = PlaceRestaurant;
-
-export interface Pupuseada {
-  id: string;
-  restaurant: Restaurant | null;
-  people: string[];
-  billing: BillingMethod;
-  orders: PersonOrder[];
-  createdAt: number;
 }
 
 export const PUPUSA_TYPES: PupusaType[] = [
@@ -103,7 +84,6 @@ export const PUPUSA_TYPES: PupusaType[] = [
   { id: 'qespinaca', code: 'Q/Esp', name: 'Queso con Espinaca', description: 'Queso y espinaca' },
   { id: 'fqloroco', code: 'F/Q/L', name: 'Frijol con Queso y Loroco', description: 'Frijol, queso y loroco' },
   { id: 'chicharronloroco', code: 'Ch/L', name: 'Chicharrón con Loroco', description: 'Chicharrón, queso y loroco' },
-  { id: 'qayote', code: 'Q/Ay', name: 'Queso con Ayote', description: 'Queso y ayote dulce' },
   { id: 'fqchip', code: 'F/Q/Chip', name: 'Frijol con Queso y Chipilín', description: 'Frijol, queso y chipilín' },
   { id: 'camaron', code: 'Camarón', name: 'Camarón', description: 'Camarón y queso' },
   { id: 'frijolchorizo', code: 'F/Chor', name: 'Frijol con Chorizo', description: 'Frijol y chorizo' },
@@ -117,17 +97,6 @@ export const PUPUSA_BY_ID: Record<PupusaTypeId, PupusaType> = PUPUSA_TYPES.reduc
   },
   {} as Record<PupusaTypeId, PupusaType>
 );
-
-export const SAMPLE_RESTAURANTS: Restaurant[] = [
-  { id: 'r1', name: 'Pupusería El Buen Gusto', location: 'San Salvador' },
-  { id: 'r2', name: 'Pupusería Doña Tere', location: 'Santa Tecla' },
-  { id: 'r3', name: 'Pupusería La Esperanza', location: 'Antiguo Cuscatlán' },
-  { id: 'r4', name: 'Pupusería Las Delicias', location: 'Soyapango' },
-  { id: 'r5', name: 'Pupusería El Salvador', location: 'San Miguel' },
-  { id: 'r6', name: 'Pupusería La Ceiba', location: 'La Libertad' },
-  { id: 'r7', name: 'Pupusería Ruth', location: 'Mejicanos' },
-  { id: 'r8', name: 'Pupusería Balboa', location: 'San Salvador' },
-];
 
 export const MASA_LABEL: Record<MasaType, string> = {
   maiz: 'Maíz',

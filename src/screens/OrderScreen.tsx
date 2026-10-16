@@ -19,10 +19,9 @@ import {
   PupusaItem,
   MasaType,
   PersonOrder,
-  MASA_LABEL,
   MASA_EMOJI,
 } from '@/data/pupusa';
-import { personTotal, consolidateOrders } from '@/data/consolidation';
+import { consolidateOrders } from '@/data/consolidation';
 import { Theme } from '@/hooks/useTheme';
 import type { PupusaType } from '@/data/pupusa';
 
