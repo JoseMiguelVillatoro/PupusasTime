@@ -13,6 +13,8 @@ interface Props {
   personOrder: PersonOrder;
   allOrders: PersonOrder[];
   returnsToFinal: boolean;
+  /** Texto del botón al terminar la última persona (por defecto "Ver orden final"). */
+  lastLabel?: string;
   onEdit: () => void;
   onContinue: () => void;
   theme: Theme;
@@ -25,6 +27,7 @@ export function PersonSummaryScreen({
   personOrder,
   allOrders,
   returnsToFinal,
+  lastLabel = 'Ver orden final',
   onEdit,
   onContinue,
   theme,
@@ -106,7 +109,7 @@ export function PersonSummaryScreen({
           Editar pedido
         </Button>
         <Button onClick={onContinue}>
-          {returnsToFinal ? 'Volver al resumen' : isLast ? 'Ver orden final' : 'Siguiente persona'}
+          {returnsToFinal ? 'Volver al resumen' : isLast ? lastLabel : 'Siguiente persona'}
         </Button>
       </div>
     </div>

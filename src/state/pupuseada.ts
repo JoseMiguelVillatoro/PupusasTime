@@ -17,6 +17,7 @@ import type { Seat, TableSnapshot, TableStatus } from '@/shared/backend';
 export type Screen =
   | 'home'
   | 'restaurant'
+  | 'mode'
   | 'people'
   | 'order'
   | 'personSummary'
@@ -70,6 +71,8 @@ export interface PupuseadaState {
   shared?: SharedInfo | null;
   /** Código que llegó por link (?mesa=…), para prellenar la pantalla de unirse. */
   pendingCode?: string;
+  /** Mesa compartida: las personas que este teléfono va pidiendo en cascada. */
+  queue?: string[];
 }
 
 export interface PersonDraft {
@@ -96,7 +99,8 @@ export type Action =
   | { type: 'OPEN_JOIN'; code?: string }
   | { type: 'SHARED_ENTER'; seat: Seat; myUid: string; snapshot: TableSnapshot }
   | { type: 'SHARED_SYNC'; snapshot: TableSnapshot }
-  | { type: 'OPEN_ORDER_FOR'; personId: string };
+  | { type: 'OPEN_ORDER_FOR'; personId: string }
+  | { type: 'START_MY_ORDERS' };
 
 export function newId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -144,6 +148,14 @@ export function canEdit(s: PupuseadaState, personId: string): boolean {
   if (!s.shared) return true;
   if (isHost(s)) return true;
   return s.shared.meta[personId]?.managedBy === s.shared.myUid && s.shared.status === 'ordering';
+}
+
+/** Mesa compartida: las personas que pide este teléfono (yo primero). */
+export function myPeople(s: PupuseadaState): PersonOrder[] {
+  const shared = s.shared;
+  if (!shared) return [];
+  const mine = s.people.filter((p) => shared.meta[p.id]?.managedBy === shared.myUid);
+  return [...mine.filter((p) => p.id === shared.myParticipantId), ...mine.filter((p) => p.id !== shared.myParticipantId)];
 }
 
 /** Para "Cada teléfono paga lo suyo": a qué teléfono pertenece cada persona. */
@@ -204,6 +216,7 @@ function applySnapshot(state: PupuseadaState, shared: SharedInfo, snapshot: Tabl
       accountsPublished: Boolean(snapshot.payment?.published),
     },
     currentPersonId: stillThere ? state.currentPersonId : null,
+    queue: state.queue?.filter((id) => people.some((p) => p.id === id)),
     screen: editingGone ? 'lobby' : state.screen,
   };
 }
@@ -230,7 +243,7 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
       return { ...state, restaurant: action.restaurant };
 
     case 'RESTAURANT_DONE':
-      return { ...state, screen: state.returnToFinal ? 'final' : 'people', returnToFinal: false };
+      return { ...state, screen: state.returnToFinal ? 'final' : 'mode', returnToFinal: false };
 
     case 'SET_PEOPLE': {
       // Conserva lo que cada quien ya pidió (por ID) y descarta a quien se quitó.
@@ -268,14 +281,10 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
           ...state.shared.meta,
           [state.currentPersonId]: { ...state.shared.meta[state.currentPersonId], done: true },
         };
-        return {
-          ...state,
-          people,
-          shared: { ...state.shared, meta },
-          currentPersonId: null,
-          returnToFinal: false,
-          screen: state.returnToFinal ? 'final' : 'lobby',
-        };
+        const shared = { ...state.shared, meta };
+        // Editando desde la orden final se vuelve directo; si no, resumen y siguiente en la cascada.
+        if (state.returnToFinal) return { ...state, people, shared, currentPersonId: null, returnToFinal: false, screen: 'final' };
+        return { ...state, people, shared, screen: 'personSummary' };
       }
       return { ...state, people, screen: 'personSummary' };
     }
@@ -284,6 +293,12 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
       return { ...state, screen: 'order' };
 
     case 'NEXT_PERSON': {
+      if (state.shared) {
+        const queue = state.queue ?? [];
+        const next = queue[queue.indexOf(state.currentPersonId ?? '') + 1];
+        if (next) return { ...state, currentPersonId: next, screen: 'order' };
+        return { ...state, currentPersonId: null, queue: undefined, screen: 'lobby' };
+      }
       if (state.returnToFinal) {
         // Si quedan personas sin pedido (agregadas al editar), seguimos con ellas.
         const pending = state.people.find(isEmptyOrder);
@@ -298,7 +313,11 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
 
     case 'ORDER_BACK': {
       if (state.shared) {
-        return { ...state, screen: state.returnToFinal ? 'final' : 'lobby', currentPersonId: null, returnToFinal: false };
+        if (state.returnToFinal) return { ...state, screen: 'final', currentPersonId: null, returnToFinal: false };
+        const queue = state.queue ?? [];
+        const i = queue.indexOf(state.currentPersonId ?? '');
+        if (i > 0) return { ...state, currentPersonId: queue[i - 1], screen: 'personSummary' };
+        return { ...state, screen: 'lobby', currentPersonId: null, queue: undefined };
       }
       if (state.returnToFinal) return { ...state, screen: 'final', currentPersonId: null, returnToFinal: false };
       const i = indexOfCurrent(state);
@@ -339,7 +358,8 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
     case 'SHARED_ENTER': {
       const base: PupuseadaState = {
         ...state,
-        screen: 'lobby',
+        screen: 'people',
+        queue: undefined,
         people: [],
         groups: [],
         billing: null,
@@ -356,7 +376,9 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
         status: action.snapshot.status,
         meta: {},
       };
-      return applySnapshot(base, shared, action.snapshot);
+      const next = applySnapshot(base, shared, action.snapshot);
+      // Si ya había pedido (volvió a entrar con el código), directo a la mesa.
+      return next.shared?.meta[action.seat.participantId]?.done ? { ...next, screen: 'lobby' } : next;
     }
 
     case 'SHARED_SYNC':
@@ -365,7 +387,17 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
 
     case 'OPEN_ORDER_FOR':
       if (!state.people.some((p) => p.id === action.personId) || !canEdit(state, action.personId)) return state;
-      return { ...state, currentPersonId: action.personId, screen: 'order', returnToFinal: false };
+      return { ...state, currentPersonId: action.personId, queue: [action.personId], screen: 'order', returnToFinal: false };
+
+    case 'START_MY_ORDERS': {
+      if (!state.shared) return state;
+      const shared = state.shared;
+      const mine = myPeople(state).filter((p) => canEdit(state, p.id));
+      const pending = mine.filter((p) => !shared.meta[p.id]?.done);
+      const queue = (pending.length > 0 ? pending : mine).map((p) => p.id);
+      if (queue.length === 0) return { ...state, screen: 'lobby', queue: undefined };
+      return { ...state, queue, currentPersonId: queue[0], screen: 'order', returnToFinal: false };
+    }
 
     default:
       return state;

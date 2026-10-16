@@ -1,15 +1,13 @@
 import { useState } from 'react';
-import { Check, Copy, Lock, LogOut, MessageCircle, Pencil, Plus, Unlock, WifiOff, X } from 'lucide-react';
+import { Lock, LogOut, Pencil, UserPlus, Unlock, WifiOff, X } from 'lucide-react';
 import { Button } from '@/components/Button';
 import { TopBar } from '@/components/TopBar';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { QrCode } from '@/components/QrCode';
+import { InviteCard } from '@/components/InviteCard';
 import { Theme } from '@/hooks/useTheme';
 import type { PersonOrder } from '@/data/pupusa';
-import { consolidateOrders, extrasCount, personTotal, whatsappShareUrl } from '@/data/consolidation';
+import { consolidateOrders, extrasCount, personTotal } from '@/data/consolidation';
 import type { SharedInfo } from '@/state/pupuseada';
-import { shareUrl } from '@/shared/backend';
-import { copyText } from '@/lib/clipboard';
 
 interface Props {
   shared: SharedInfo;
@@ -20,7 +18,8 @@ interface Props {
   error: string | null;
   offline: boolean;
   onOrderFor: (personId: string) => void;
-  onAddOffline: (name: string) => void;
+  /** Agregar gente o pedir por los de este teléfono (cascada). */
+  onMyPeople: () => void;
   onRemove: (personId: string) => void;
   onLock: () => void;
   onReopen: () => void;
@@ -42,7 +41,7 @@ export function LobbyScreen({
   error,
   offline,
   onOrderFor,
-  onAddOffline,
+  onMyPeople,
   onRemove,
   onLock,
   onReopen,
@@ -52,26 +51,15 @@ export function LobbyScreen({
   theme,
   onToggleTheme,
 }: Props) {
-  const [copied, setCopied] = useState(false);
-  const [offlineName, setOfflineName] = useState('');
-  const [addingOffline, setAddingOffline] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
 
   const open = shared.status === 'ordering';
-  const link = shareUrl(shared.code);
   const total = consolidateOrders(people).total;
   const drinks = people.reduce((s, p) => s + extrasCount(p), 0);
   const readyCount = people.filter((p) => shared.meta[p.id]?.done).length;
-  const me = people.find((p) => p.id === shared.myParticipantId);
+  const mine = people.filter((p) => shared.meta[p.id]?.managedBy === shared.myUid);
+  const minePending = mine.filter((p) => !shared.meta[p.id]?.done).length;
   const hostPerson = people.find((p) => shared.meta[p.id]?.uid === shared.hostUid);
-
-  const invite = `🫓 ¡Vamos por pupusas${restaurantName ? ` a ${restaurantName}` : ''}! Pedí desde tu teléfono: ${link} (código ${shared.code})`;
-
-  const handleCopy = async () => {
-    await copyText(link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -103,32 +91,7 @@ export function LobbyScreen({
           </div>
         )}
 
-        {/* Código e invitación */}
-        <section className="p-4 rounded-3xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 flex gap-4 items-center">
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold text-charcoal-700 dark:text-cream-200">Código de la mesa</p>
-            <p className="font-display text-4xl font-bold tracking-[0.15em] text-terracotta-600 dark:text-terracotta-300" aria-label={`Código ${shared.code.split('').join(' ')}`}>
-              {shared.code}
-            </p>
-            <div className="flex flex-wrap gap-2 mt-3">
-              <a
-                href={whatsappShareUrl(invite)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-xl bg-olive-600 text-white text-sm font-bold hover:bg-olive-500 no-tap-highlight"
-              >
-                <MessageCircle className="w-4 h-4" /> Invitar
-              </a>
-              <button
-                onClick={handleCopy}
-                className="inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-xl bg-cream-200 dark:bg-night-100 text-charcoal-800 dark:text-cream-100 text-sm font-bold no-tap-highlight"
-              >
-                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />} {copied ? 'Copiado' : 'Copiar link'}
-              </button>
-            </div>
-          </div>
-          <QrCode value={link} label={`Código QR para unirse a la mesa ${shared.code}`} />
-        </section>
+        <InviteCard code={shared.code} restaurantName={restaurantName} />
 
         {!open && (
           <div className="rounded-2xl bg-cream-200 dark:bg-night-100 p-4 flex items-center gap-3" role="status">
@@ -190,7 +153,7 @@ export function LobbyScreen({
                   >
                     {done ? 'Listo' : 'Pendiente'}
                   </span>
-                  {canOrder && !isMe && (
+                  {canOrder && (
                     <button
                       onClick={() => onOrderFor(p.id)}
                       className="w-11 h-11 -mr-1 rounded-full flex items-center justify-center text-charcoal-700 dark:text-cream-200 hover:bg-cream-200 dark:hover:bg-night-100 no-tap-highlight shrink-0"
@@ -213,46 +176,6 @@ export function LobbyScreen({
               );
             })}
           </ul>
-
-          {(isHost || open) && (
-            <div className="mt-3">
-              {addingOffline ? (
-                <form
-                  className="flex gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!offlineName.trim()) return;
-                    onAddOffline(offlineName.trim());
-                    setOfflineName('');
-                    setAddingOffline(false);
-                  }}
-                >
-                  <label htmlFor="offline-name" className="sr-only">
-                    Nombre de quien pide con vos
-                  </label>
-                  <input
-                    id="offline-name"
-                    autoFocus
-                    value={offlineName}
-                    onChange={(e) => setOfflineName(e.target.value)}
-                    maxLength={40}
-                    placeholder="Nombre"
-                    className="flex-1 min-w-0 px-4 py-3 rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 text-charcoal-800 dark:text-cream-100 placeholder:text-charcoal-700/50 focus:outline-none focus:border-terracotta-400"
-                  />
-                  <button type="submit" disabled={!offlineName.trim() || busy} className="px-4 rounded-2xl bg-terracotta-500 text-white font-bold disabled:opacity-40 no-tap-highlight">
-                    Agregar
-                  </button>
-                </form>
-              ) : (
-                <button
-                  onClick={() => setAddingOffline(true)}
-                  className="w-full flex items-center justify-center gap-2 min-h-[48px] rounded-2xl border border-dashed border-terracotta-300 dark:border-terracotta-600/50 text-terracotta-700 dark:text-terracotta-200 font-bold no-tap-highlight"
-                >
-                  <Plus className="w-4 h-4" /> Agregar a alguien que pide con vos
-                </button>
-              )}
-            </div>
-          )}
         </section>
 
         {/* Total en vivo */}
@@ -301,9 +224,12 @@ export function LobbyScreen({
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-cream-100/95 dark:bg-night-400/95 backdrop-blur-md px-5 py-4 safe-bottom border-t border-cream-200 dark:border-night-100 space-y-2 z-10">
-        {me && open && (
-          <Button variant={isHost ? 'secondary' : 'primary'} onClick={() => onOrderFor(me.id)}>
-            {shared.meta[me.id]?.done ? 'Cambiar mi pedido' : 'Hacer mi pedido'}
+        {open && (
+          <Button variant={isHost && minePending === 0 ? 'secondary' : 'primary'} onClick={onMyPeople}>
+            <span className="inline-flex items-center gap-2">
+              <UserPlus className="w-5 h-5" />
+              {minePending > 0 ? `Pedir lo de mi gente (${minePending})` : 'Agregar a alguien o cambiar pedidos'}
+            </span>
           </Button>
         )}
         {isHost && open && (

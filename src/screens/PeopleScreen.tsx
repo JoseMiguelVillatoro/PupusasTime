@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { Button } from '@/components/Button';
 import { TopBar } from '@/components/TopBar';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { Minus, Plus, X, Smartphone } from 'lucide-react';
-import { rememberName, rememberedName } from '@/lib/myName';
+import { Minus, Plus, X } from 'lucide-react';
+import { InviteCard } from '@/components/InviteCard';
 import { Theme } from '@/hooks/useTheme';
 import type { PersonDraft } from '@/state/pupuseada';
 
@@ -20,10 +20,11 @@ interface Props {
   initialPeople: { id: string; name: string; hasOrder: boolean }[];
   /** true cuando se llega desde el resumen final para agregar o quitar gente. */
   editing: boolean;
-  /** Abrir una mesa para que cada quien pida desde su teléfono. */
-  onShare?: (hostName: string) => void;
-  shareBusy?: boolean;
-  shareError?: string | null;
+  /**
+   * Mesa compartida: se arma la lista de quienes piden desde este teléfono.
+   * La primera persona es quien tiene el cel y no se puede quitar.
+   */
+  shared?: { meId: string; invite?: { code: string; restaurantName: string | null }; busy: boolean; error: string | null };
   theme: Theme;
   onToggleTheme: () => void;
 }
@@ -36,13 +37,10 @@ export function PeopleScreen({
   onContinue,
   initialPeople,
   editing,
-  onShare,
-  shareBusy = false,
-  shareError = null,
+  shared,
   theme,
   onToggleTheme,
 }: Props) {
-  const [hostName, setHostName] = useState(rememberedName);
   const [rows, setRows] = useState<Row[]>(() =>
     initialPeople.length
       ? initialPeople.map((p) => ({ key: p.id, id: p.id, name: p.name, hasOrder: p.hasOrder }))
@@ -54,8 +52,10 @@ export function PeopleScreen({
 
   const addRow = () => setRows((prev) => [...prev, newRow()]);
 
+  const isMe = (row: Row) => Boolean(shared && row.id === shared.meId);
+
   const removeRow = (row: Row) => {
-    if (rows.length <= 1) return;
+    if (rows.length <= 1 || isMe(row)) return;
     if (row.hasOrder && !window.confirm(`${row.name || 'Esta persona'} ya pidió. ¿La quitamos de la pupuseada?`)) return;
     setRows((prev) => prev.filter((r) => r.key !== row.key));
   };
@@ -72,54 +72,24 @@ export function PeopleScreen({
       <TopBar onBack={onBack} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
       <div className="px-5 pb-2">
         <h2 className="font-display text-3xl font-bold text-charcoal-900 dark:text-cream-50 mb-1">
-          {editing ? 'Ajustá la mesa' : '¿Quiénes somos?'}
+          {shared ? '¿Quiénes piden desde este cel?' : editing ? 'Ajustá la mesa' : '¿Quiénes somos?'}
         </h2>
         <p className="text-charcoal-700 dark:text-cream-200 mb-6">
-          {editing ? 'Agregá a quien llegó tarde o quitá a quien se fue.' : '¿Cuántas personas?'}
+          {shared
+            ? 'Vos y quienes pidan con vos. Después van pidiendo uno por uno.'
+            : editing
+              ? 'Agregá a quien llegó tarde o quitá a quien se fue.'
+              : '¿Cuántas personas?'}
         </p>
 
-        {onShare && !editing && (
-          <form
-            className="mb-6 p-4 rounded-2xl bg-olive-100/60 dark:bg-olive-600/15 border border-olive-200 dark:border-olive-600/30"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!hostName.trim() || shareBusy) return;
-              rememberName(hostName);
-              onShare(hostName.trim());
-            }}
-          >
-            <p className="flex items-center gap-2 font-bold text-charcoal-900 dark:text-cream-50">
-              <Smartphone className="w-4 h-4" /> Que cada quien pida desde su teléfono
-            </p>
-            <p className="text-sm text-charcoal-700 dark:text-cream-200 mt-1 mb-3">
-              Abrís la mesa, compartís el código y cada quien elige lo suyo. Ves todo en vivo.
-            </p>
-            <div className="flex gap-2">
-              <label htmlFor="host-name" className="sr-only">Tu nombre</label>
-              <input
-                id="host-name"
-                value={hostName}
-                onChange={(e) => setHostName(e.target.value)}
-                maxLength={40}
-                placeholder="Tu nombre"
-                className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-white dark:bg-night-200 border border-cream-200 dark:border-night-100 text-charcoal-800 dark:text-cream-100 placeholder:text-charcoal-700/50 focus:outline-none focus:border-terracotta-400"
-              />
-              <button
-                type="submit"
-                disabled={!hostName.trim() || shareBusy}
-                className="px-4 rounded-xl bg-olive-600 text-white font-bold disabled:opacity-40 no-tap-highlight shrink-0"
-              >
-                {shareBusy ? 'Abriendo…' : 'Abrir mesa'}
-              </button>
-            </div>
-            {shareError && (
-              <p role="alert" className="mt-2 text-sm font-semibold text-red-700 dark:text-red-200">{shareError}</p>
-            )}
-          </form>
-        )}
-
-        {onShare && !editing && (
-          <p className="text-sm font-semibold text-charcoal-700 dark:text-cream-200 mb-3">O pidan todos desde este teléfono:</p>
+        {shared?.invite && (
+          <div className="mb-6">
+            <InviteCard
+              code={shared.invite.code}
+              restaurantName={shared.invite.restaurantName}
+              title="Los demás se unen con este código"
+            />
+          </div>
         )}
 
         <div className="flex items-center justify-center gap-8 mb-8">
@@ -159,6 +129,7 @@ export function PeopleScreen({
             <div className="flex-1 relative">
               <input
                 value={row.name}
+                readOnly={Boolean(shared && row.id)}
                 onChange={(e) => updateName(row.key, e.target.value)}
                 placeholder={`Persona ${i + 1}`}
                 aria-label={`Nombre de la persona ${i + 1}`}
@@ -172,8 +143,8 @@ export function PeopleScreen({
             </div>
             <button
               onClick={() => removeRow(row)}
-              disabled={rows.length <= 1}
-              className="w-11 h-11 rounded-full text-charcoal-700 dark:text-cream-200 hover:bg-cream-200 dark:hover:bg-night-100 flex items-center justify-center active:scale-90 transition-all disabled:opacity-30 no-tap-highlight shrink-0"
+              disabled={rows.length <= 1 || isMe(row)}
+              className={`${isMe(row) ? 'invisible' : ''} w-11 h-11 rounded-full text-charcoal-700 dark:text-cream-200 hover:bg-cream-200 dark:hover:bg-night-100 flex items-center justify-center active:scale-90 transition-all disabled:opacity-30 no-tap-highlight shrink-0`}
               aria-label={`Quitar a ${row.name || `persona ${i + 1}`}`}
             >
               <X className="w-5 h-5" strokeWidth={2.5} />
@@ -183,8 +154,14 @@ export function PeopleScreen({
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-cream-100/95 dark:bg-night-400/95 backdrop-blur-md px-5 py-4 safe-bottom border-t border-cream-200 dark:border-night-100">
-        <Button onClick={() => onContinue(rows.map((r) => ({ id: r.id, name: r.name })))} disabled={!canContinue}>
-          {editing ? 'Guardar cambios' : 'Continuar'}
+        {shared?.error && (
+          <p role="alert" className="mb-2 text-sm font-semibold text-red-700 dark:text-red-200">{shared.error}</p>
+        )}
+        <Button
+          onClick={() => onContinue(rows.map((r) => ({ id: r.id, name: r.name })))}
+          disabled={!canContinue || Boolean(shared?.busy)}
+        >
+          {shared ? (shared.busy ? 'Guardando…' : 'Empezar a pedir') : editing ? 'Guardar cambios' : 'Continuar'}
         </Button>
       </div>
     </div>

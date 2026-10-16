@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ExtraItem, PupusaItem } from '@/data/pupusa';
 import type { Action, PupuseadaState } from '@/state/pupuseada';
 import type { AccountGroup, BillingMethod } from '@/data/pupusa';
-import type { PaymentDraft } from '@/state/pupuseada';
+import { myPeople, type PaymentDraft } from '@/state/pupuseada';
 import { backend, SharedError, type OrderPatch, type TableSnapshot, type TableStatus } from './index';
 
 const POLL_MS = 20_000;
@@ -144,6 +144,27 @@ export function useSharedTable(state: PupuseadaState, dispatch: (a: Action) => v
         if (!tableId) return;
         await backend.addOffline(tableId, name);
         await refresh();
+      }),
+
+    /**
+     * Guarda quiénes piden desde este teléfono (agrega a los nuevos y quita a
+     * los que se borraron) y arranca la cascada de pedidos, uno tras otro.
+     */
+    setMyPeople: (list: { id?: string; name: string }[]) =>
+      run('No pudimos guardar a tu gente. Probá de nuevo.', async () => {
+        const shared = state.shared;
+        if (!shared) return;
+        const keep = new Set(list.map((d) => d.id).filter(Boolean));
+        const gone = myPeople(state).filter((p) => p.id !== shared.myParticipantId && !keep.has(p.id));
+        for (const p of gone) {
+          await backend.removeParticipant(p.id);
+          pending.current.delete(p.id);
+        }
+        for (const d of list) {
+          if (!d.id && d.name.trim()) await backend.addOffline(shared.pupuseadaId, d.name.trim());
+        }
+        await refresh();
+        dispatch({ type: 'START_MY_ORDERS' });
       }),
 
     remove: (personId: string) =>

@@ -9,11 +9,12 @@ import { FinalSummaryScreen } from '@/screens/FinalSummaryScreen';
 import { PaymentScreen } from '@/screens/PaymentScreen';
 import { useTheme } from '@/hooks/useTheme';
 import { usePupuseada } from '@/state/usePupuseada';
-import { hasOrders, isHost, phoneOwnership } from '@/state/pupuseada';
+import { hasOrders, isHost, myPeople, phoneOwnership } from '@/state/pupuseada';
 import { accountsFor } from '@/data/consolidation';
 import { archive } from '@/state/storage';
 import { JoinScreen } from '@/screens/JoinScreen';
 import { LobbyScreen } from '@/screens/LobbyScreen';
+import { ModeScreen } from '@/screens/ModeScreen';
 import { useSharedTable } from '@/shared/useSharedTable';
 import { normalizeCode } from '@/shared/backend';
 
@@ -46,6 +47,10 @@ export default function App() {
 
   const currentIdx = people.findIndex((p) => p.id === state.currentPersonId);
   const current = currentIdx >= 0 ? people[currentIdx] : null;
+  // En mesa compartida la cascada recorre solo a la gente de este teléfono.
+  const queue = state.shared ? (state.queue ?? []) : null;
+  const stepIdx = queue ? Math.max(0, queue.indexOf(state.currentPersonId ?? '')) : currentIdx;
+  const stepTotal = queue ? Math.max(1, queue.length) : people.length;
 
   // Un estado guardado inconsistente (p. ej. de una versión anterior) no deja la pantalla en blanco.
   const orphanScreen = (state.screen === 'order' || state.screen === 'personSummary') && !current;
@@ -89,7 +94,7 @@ export default function App() {
             error={table.error}
             offline={table.offline}
             onOrderFor={(personId) => dispatch({ type: 'OPEN_ORDER_FOR', personId })}
-            onAddOffline={(name) => void table.addOffline(name)}
+            onMyPeople={() => dispatch({ type: 'GO', screen: 'people' })}
             onRemove={(personId) => void table.remove(personId)}
             onLock={async () => {
               await table.setStatus('locked');
@@ -113,19 +118,48 @@ export default function App() {
           />
         )}
 
-        {state.screen === 'people' && (
+        {state.screen === 'mode' && (
+          <ModeScreen
+            onBack={() => dispatch({ type: 'GO', screen: 'restaurant' })}
+            onSolo={() => dispatch({ type: 'GO', screen: 'people' })}
+            onShare={(myName) => void table.share(myName)}
+            busy={table.busy}
+            error={table.error}
+            {...themeProps}
+          />
+        )}
+
+        {state.screen === 'people' && !state.shared && (
           <PeopleScreen
             initialPeople={people.map((p) => ({ id: p.id, name: p.name, hasOrder: p.items.length > 0 || (p.extras?.length ?? 0) > 0 }))}
             editing={state.returnToFinal}
             onBack={() =>
               state.returnToFinal
                 ? dispatch({ type: 'NEXT_PERSON' })
-                : dispatch({ type: 'GO', screen: 'restaurant' })
+                : dispatch({ type: 'GO', screen: 'mode' })
             }
             onContinue={(list) => dispatch({ type: 'SET_PEOPLE', people: list })}
-            onShare={(hostName) => void table.share(hostName)}
-            shareBusy={table.busy}
-            shareError={table.error}
+            {...themeProps}
+          />
+        )}
+
+        {state.screen === 'people' && state.shared && (
+          <PeopleScreen
+            key={state.shared.pupuseadaId}
+            initialPeople={myPeople(state).map((p) => ({
+              id: p.id,
+              name: p.name,
+              hasOrder: Boolean(state.shared?.meta[p.id]?.done),
+            }))}
+            editing={false}
+            onBack={() => dispatch({ type: 'GO', screen: 'lobby' })}
+            onContinue={(list) => void table.setMyPeople(list)}
+            shared={{
+              meId: state.shared.myParticipantId,
+              invite: host ? { code: state.shared.code, restaurantName: state.restaurant?.name ?? null } : undefined,
+              busy: table.busy,
+              error: table.error,
+            }}
             {...themeProps}
           />
         )}
@@ -133,11 +167,11 @@ export default function App() {
         {state.screen === 'order' && current && (
           <OrderScreen
             key={current.id}
-            personIndex={currentIdx}
-            totalPeople={people.length}
+            personIndex={stepIdx}
+            totalPeople={stepTotal}
             person={current}
             allOrders={people}
-            editingFromFinal={state.returnToFinal || Boolean(state.shared)}
+            editingFromFinal={state.returnToFinal}
             onBack={() => dispatch({ type: 'ORDER_BACK' })}
             onComplete={(items, extras) => {
               dispatch({ type: 'SAVE_ORDER', items, extras });
@@ -149,11 +183,13 @@ export default function App() {
 
         {state.screen === 'personSummary' && current && (
           <PersonSummaryScreen
-            personIndex={currentIdx}
-            totalPeople={people.length}
+            personIndex={stepIdx}
+            totalPeople={stepTotal}
             personOrder={current}
             allOrders={people}
+            lastLabel={state.shared ? 'Listo, volver a la mesa' : undefined}
             returnsToFinal={
+              !state.shared &&
               state.returnToFinal &&
               !people.some((p) => p.id !== current.id && p.items.length === 0 && (p.extras?.length ?? 0) === 0)
             }

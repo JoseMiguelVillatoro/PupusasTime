@@ -10,7 +10,8 @@ const items = (n: number): PupusaItem[] => [{ id: 'i', pupusaTypeId: 'fq', masa:
 describe('flujo de la pupuseada', () => {
   it('restaurante opcional → personas → pedido de cada quien → resumen final', () => {
     let s = run([{ type: 'START' }, { type: 'RESTAURANT_DONE' }]);
-    expect(s.screen).toBe('people');
+    expect(s.screen).toBe('mode');
+    s = reducer(s, { type: 'GO', screen: 'people' });
     expect(s.restaurant).toBeNull();
 
     s = reducer(s, { type: 'SET_PEOPLE', people: [{ name: 'Ana' }, { name: ' Beto ' }] });
@@ -151,8 +152,44 @@ describe('mesa compartida', () => {
     s = reducer(s, { type: 'OPEN_ORDER_FOR', personId: 'p-beto' });
     expect(s.screen).toBe('order');
     s = reducer(s, { type: 'SAVE_ORDER', items: items(4), extras: [] });
-    expect(s.screen).toBe('lobby');
+    expect(s.screen).toBe('personSummary');
     expect(s.shared?.meta['p-beto'].done).toBe(true);
+    s = reducer(s, { type: 'NEXT_PERSON' });
+    expect(s.screen).toBe('lobby');
+  });
+
+  it('cascada: cada teléfono pide por su gente uno tras otro y vuelve a la mesa', () => {
+    // Ana todavía no pidió: al abrir la mesa le toca armar su gente.
+    let s = enter(host, 'p-ana');
+    expect(s.screen).toBe('people');
+    const withFriend = snap({
+      participants: [
+        ...snap().participants,
+        { id: 'p-amiga', uid: null, managedBy: host, name: 'Amiga', items: [], extras: [], done: false, createdAt: '3' },
+        { id: 'p-prima', uid: null, managedBy: guest, name: 'Prima', items: [], extras: [], done: false, createdAt: '4' },
+      ],
+    });
+    s = run([{ type: 'SHARED_SYNC', snapshot: withFriend }, { type: 'START_MY_ORDERS' }], s);
+    expect(s.queue).toEqual(['p-ana', 'p-amiga']); // no incluye a la gente de Beto
+    expect(s.currentPersonId).toBe('p-ana');
+
+    s = run([{ type: 'SAVE_ORDER', items: items(2), extras: [] }, { type: 'NEXT_PERSON' }], s);
+    expect(s.screen).toBe('order');
+    expect(s.currentPersonId).toBe('p-amiga');
+    s = reducer(s, { type: 'ORDER_BACK' });
+    expect(s.screen).toBe('personSummary');
+    expect(s.currentPersonId).toBe('p-ana');
+    s = run([{ type: 'NEXT_PERSON' }, { type: 'SAVE_ORDER', items: items(1), extras: [] }, { type: 'NEXT_PERSON' }], s);
+    expect(s.screen).toBe('lobby');
+    expect(s.queue).toBeUndefined();
+
+    // Ya pidieron todos los míos: la cascada vuelve a recorrerlos para cambiar algo.
+    s = reducer(s, { type: 'START_MY_ORDERS' });
+    expect(s.queue).toEqual(['p-ana', 'p-amiga']);
+  });
+
+  it('quien vuelve a entrar y ya pidió va directo a la mesa', () => {
+    expect(enter(guest, 'p-beto').screen).toBe('lobby');
   });
 
   it('si quitan a quien estaba editando, vuelve a la mesa', () => {
