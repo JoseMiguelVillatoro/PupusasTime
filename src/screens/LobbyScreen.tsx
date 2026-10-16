@@ -156,10 +156,12 @@ export function LobbyScreen({
               const done = Boolean(meta?.done);
               const n = personTotal(p);
               const x = extrasCount(p);
-              const canOrder = isHost || (isMe && open);
+              const mineToOrder = meta?.managedBy === shared.myUid;
+              const canOrder = isHost || (mineToOrder && open);
+              const manager = noPhone ? people.find((x) => shared.meta[x.id]?.uid && shared.meta[x.id]?.uid === meta?.managedBy) : undefined;
               const detail = [
                 isTheHost ? 'Anfitrión' : null,
-                noPhone ? 'Sin teléfono' : null,
+                noPhone ? (manager ? `Pide con ${manager.id === shared.myParticipantId ? 'vos' : manager.name}` : 'Sin teléfono') : null,
                 done ? plural(n, 'pupusa', 'pupusas') + (x > 0 ? ` · ${plural(x, 'extra', 'extras')}` : '') : 'Todavía no pidió',
               ]
                 .filter(Boolean)
@@ -197,7 +199,7 @@ export function LobbyScreen({
                       <Pencil className="w-4 h-4" />
                     </button>
                   )}
-                  {isHost && !isTheHost && (
+                  {(isHost ? !isTheHost : noPhone && mineToOrder && open) && (
                     <button
                       onClick={() => onRemove(p.id)}
                       disabled={busy}
@@ -212,7 +214,7 @@ export function LobbyScreen({
             })}
           </ul>
 
-          {isHost && (
+          {(isHost || open) && (
             <div className="mt-3">
               {addingOffline ? (
                 <form
@@ -226,7 +228,7 @@ export function LobbyScreen({
                   }}
                 >
                   <label htmlFor="offline-name" className="sr-only">
-                    Nombre de la persona sin teléfono
+                    Nombre de quien pide con vos
                   </label>
                   <input
                     id="offline-name"
@@ -246,7 +248,7 @@ export function LobbyScreen({
                   onClick={() => setAddingOffline(true)}
                   className="w-full flex items-center justify-center gap-2 min-h-[48px] rounded-2xl border border-dashed border-terracotta-300 dark:border-terracotta-600/50 text-terracotta-700 dark:text-terracotta-200 font-bold no-tap-highlight"
                 >
-                  <Plus className="w-4 h-4" /> Agregar a alguien sin teléfono
+                  <Plus className="w-4 h-4" /> Agregar a alguien que pide con vos
                 </button>
               )}
             </div>

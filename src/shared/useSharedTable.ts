@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ExtraItem, PupusaItem } from '@/data/pupusa';
 import type { Action, PupuseadaState } from '@/state/pupuseada';
+import type { AccountGroup, BillingMethod } from '@/data/pupusa';
+import type { PaymentDraft } from '@/state/pupuseada';
 import { backend, SharedError, type OrderPatch, type TableSnapshot, type TableStatus } from './index';
 
 const POLL_MS = 20_000;
@@ -156,6 +158,24 @@ export function useSharedTable(state: PupuseadaState, dispatch: (a: Action) => v
         if (!tableId) return;
         await backend.setStatus(tableId, status);
         await refresh();
+      }),
+
+    /** Anfitrión: publica la forma de pagar, los precios y la propina para toda la mesa. */
+    publishAccounts: (billing: BillingMethod, groups: AccountGroup[], payment: PaymentDraft) =>
+      run('No pudimos compartir las cuentas con la mesa.', async () => {
+        if (!tableId) return;
+        await backend.setAccounts(
+          tableId,
+          { method: billing, groups },
+          {
+            priceInputs: payment.priceInputs,
+            uniformPrice: payment.uniformPrice,
+            uniformInput: payment.uniformInput,
+            hasTip: payment.hasTip,
+            tipInput: payment.tipInput,
+            published: true,
+          }
+        );
       }),
 
     refresh,

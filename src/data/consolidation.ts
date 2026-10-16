@@ -6,6 +6,7 @@ import {
   MASA_EMOJI,
   PersonOrder,
   AccountGroup,
+  BillingMethod,
 } from './pupusa';
 
 export interface ConsolidatedEntry {
@@ -126,12 +127,39 @@ export function pruneGroups(groups: AccountGroup[], orders: PersonOrder[]): Acco
   return groups.map((g) => ({ ...g, personIds: g.personIds.filter((pid) => ids.has(pid)) }));
 }
 
-/** Las cuentas según el método elegido: una sola, una por persona o los grupos armados. */
+/**
+ * Para dividir por teléfono: qué teléfono pide por cada persona y cómo se
+ * llama la cuenta de ese teléfono ("Cuenta de Javier").
+ */
+export interface PhoneOwnership {
+  phoneOf: Record<string, string>;
+  phoneName: Record<string, string>;
+}
+
+/** Las cuentas según el método elegido: una sola, una por persona, por teléfono o los grupos armados. */
 export function accountsFor(
-  billing: 'single' | 'split' | 'groups',
+  billing: BillingMethod,
   orders: PersonOrder[],
-  groups: AccountGroup[]
+  groups: AccountGroup[],
+  phones?: PhoneOwnership
 ): AccountGroup[] {
+  if (billing === 'byPhone' && phones) {
+    const byPhone = new Map<string, AccountGroup>();
+    for (const o of orders) {
+      const phone = phones.phoneOf[o.id] ?? `solo-${o.id}`;
+      const g = byPhone.get(phone) ?? {
+        id: `phone-${phone}`,
+        name: phones.phoneName[phone] ? `Cuenta de ${phones.phoneName[phone]}` : o.name,
+        personIds: [],
+      };
+      g.personIds.push(o.id);
+      byPhone.set(phone, g);
+    }
+    return [...byPhone.values()];
+  }
+  if (billing === 'byPhone') {
+    return orders.map((o) => ({ id: `person-${o.id}`, name: o.name, personIds: [o.id] }));
+  }
   if (billing === 'single') {
     return [{ id: 'single-account', name: 'Cuenta única', personIds: orders.map((o) => o.id) }];
   }

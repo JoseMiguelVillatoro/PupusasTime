@@ -9,7 +9,8 @@ import { FinalSummaryScreen } from '@/screens/FinalSummaryScreen';
 import { PaymentScreen } from '@/screens/PaymentScreen';
 import { useTheme } from '@/hooks/useTheme';
 import { usePupuseada } from '@/state/usePupuseada';
-import { hasOrders, isHost } from '@/state/pupuseada';
+import { hasOrders, isHost, phoneOwnership } from '@/state/pupuseada';
+import { accountsFor } from '@/data/consolidation';
 import { archive } from '@/state/storage';
 import { JoinScreen } from '@/screens/JoinScreen';
 import { LobbyScreen } from '@/screens/LobbyScreen';
@@ -22,6 +23,12 @@ export default function App() {
   const table = useSharedTable(state, dispatch);
   const themeProps = { theme, onToggleTheme: toggleTheme };
   const host = isHost(state);
+  const people = state.people;
+  const guest = Boolean(state.shared) && !host;
+  const phones = phoneOwnership(state);
+  const hostName =
+    (state.shared && people.find((p) => state.shared?.meta[p.id]?.uid === state.shared?.hostUid)?.name) || 'el anfitrión';
+  const myPersonIds = state.shared ? people.filter((p) => state.shared?.meta[p.id]?.managedBy === state.shared?.myUid).map((p) => p.id) : [];
 
   // Link de invitación: /?mesa=K7Q2X abre la pantalla para unirse.
   useEffect(() => {
@@ -37,7 +44,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const people = state.people;
   const currentIdx = people.findIndex((p) => p.id === state.currentPersonId);
   const current = currentIdx >= 0 ? people[currentIdx] : null;
 
@@ -163,7 +169,8 @@ export default function App() {
             orders={people}
             onEditPerson={(personId) => dispatch({ type: 'EDIT_PERSON', personId })}
             onEditPeople={() => dispatch({ type: 'EDIT_PEOPLE' })}
-            onOpenPayment={() => dispatch({ type: 'OPEN_BILLING' })}
+            onOpenPayment={() => dispatch(guest ? { type: 'GO', screen: 'payment' } : { type: 'OPEN_BILLING' })}
+            guestAccounts={guest ? { hostName, published: Boolean(state.shared?.accountsPublished && state.billing) } : undefined}
             onFinish={() => finish(state)}
             {...themeProps}
           />
@@ -174,6 +181,11 @@ export default function App() {
             people={people}
             selected={state.billing}
             initialGroups={state.groups}
+            phoneAccounts={
+              phones
+                ? accountsFor('byPhone', people, [], phones).map((g) => ({ name: g.name, count: g.personIds.length }))
+                : undefined
+            }
             onBack={() => dispatch({ type: 'GO', screen: 'final' })}
             onContinue={(billing, groups) => dispatch({ type: 'SET_BILLING', billing, groups })}
             {...themeProps}
@@ -190,6 +202,15 @@ export default function App() {
             onChange={(patch) => dispatch({ type: 'UPDATE_PAYMENT', patch })}
             onBack={() => dispatch({ type: 'GO', screen: 'billing' })}
             onBackToSummary={() => dispatch({ type: 'GO', screen: 'final' })}
+            phones={phones}
+            readOnly={guest}
+            hostName={hostName}
+            myPersonIds={myPersonIds}
+            onPublish={
+              state.shared && host && state.billing
+                ? () => void table.publishAccounts(state.billing!, state.groups, state.payment)
+                : undefined
+            }
             {...themeProps}
           />
         )}

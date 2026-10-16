@@ -28,7 +28,8 @@ export interface PupusaType {
   description: string;
 }
 
-export type BillingMethod = 'single' | 'split' | 'groups';
+/** `byPhone` solo existe en la mesa compartida: cada teléfono paga por las personas a su cargo. */
+export type BillingMethod = 'single' | 'split' | 'groups' | 'byPhone';
 
 export interface AccountGroup {
   id: string;

@@ -76,10 +76,12 @@ export const memoryBackend: SharedBackend = {
       code = Array.from({ length: 5 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
     } while (Object.values(db.tables).some((t) => t.code === code));
     const tableId = id();
-    db.tables[tableId] = { id: tableId, code, hostUid: uid(), status: 'ordering', restaurant, createdAt: Date.now() };
+    db.tables[tableId] = {
+      id: tableId, code, hostUid: uid(), status: 'ordering', restaurant, billing: null, payment: null, createdAt: Date.now(),
+    };
     const pid = id();
     db.participants[pid] = {
-      id: pid, pupuseadaId: tableId, uid: uid(), name: hostName.trim(), items: [], extras: [], done: false,
+      id: pid, pupuseadaId: tableId, uid: uid(), managedBy: uid(), name: hostName.trim(), items: [], extras: [], done: false,
       createdAt: new Date().toISOString(),
     };
     write(db);
@@ -96,7 +98,7 @@ export const memoryBackend: SharedBackend = {
     if (table.status !== 'ordering') throw new SharedError('Esta mesa ya cerró el pedido');
     const pid = id();
     db.participants[pid] = {
-      id: pid, pupuseadaId: table.id, uid: uid(), name: name.trim(), items: [], extras: [], done: false,
+      id: pid, pupuseadaId: table.id, uid: uid(), managedBy: uid(), name: name.trim(), items: [], extras: [], done: false,
       createdAt: new Date().toISOString(),
     };
     write(db);
@@ -111,8 +113,14 @@ export const memoryBackend: SharedBackend = {
     const participants = Object.values(db.participants)
       .filter((p) => p.pupuseadaId === tableId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .map((p) => ({ id: p.id, uid: p.uid, name: p.name, items: p.items, extras: p.extras, done: p.done, createdAt: p.createdAt }));
-    return { id: t.id, code: t.code, hostUid: t.hostUid, status: t.status, restaurant: t.restaurant, participants };
+      .map((p) => ({
+        id: p.id, uid: p.uid, managedBy: p.managedBy, name: p.name, items: p.items, extras: p.extras, done: p.done,
+        createdAt: p.createdAt,
+      }));
+    return {
+      id: t.id, code: t.code, hostUid: t.hostUid, status: t.status, restaurant: t.restaurant,
+      billing: t.billing ?? null, payment: t.payment ?? null, participants,
+    };
   },
 
   async saveOrder(participantId, patch: OrderPatch) {
@@ -121,7 +129,7 @@ export const memoryBackend: SharedBackend = {
     const p = db.participants[participantId];
     if (!p) throw new SharedError('No se pudo guardar tu pedido. Probá de nuevo.');
     const t = db.tables[p.pupuseadaId];
-    const allowed = t.hostUid === uid() || (p.uid === uid() && t.status === 'ordering');
+    const allowed = t.hostUid === uid() || (p.managedBy === uid() && t.status === 'ordering');
     if (!allowed) throw new SharedError('El pedido ya está cerrado: pedile al anfitrión que lo cambie.');
     db.participants[participantId] = { ...p, ...patch };
     write(db);
@@ -130,10 +138,12 @@ export const memoryBackend: SharedBackend = {
   async addOffline(tableId, name) {
     await delay();
     const db = read();
-    if (db.tables[tableId]?.hostUid !== uid()) throw new SharedError('No pudimos agregar a esa persona.');
+    const t = db.tables[tableId];
+    const allowed = t && (t.hostUid === uid() || (isMember(db, tableId, uid()) && t.status === 'ordering'));
+    if (!allowed) throw new SharedError('No pudimos agregar a esa persona.');
     const pid = id();
     db.participants[pid] = {
-      id: pid, pupuseadaId: tableId, uid: null, name: name.trim(), items: [], extras: [], done: false,
+      id: pid, pupuseadaId: tableId, uid: null, managedBy: uid(), name: name.trim(), items: [], extras: [], done: false,
       createdAt: new Date().toISOString(),
     };
     write(db);
@@ -145,7 +155,10 @@ export const memoryBackend: SharedBackend = {
     const db = read();
     const p = db.participants[participantId];
     if (!p) return;
-    if (db.tables[p.pupuseadaId]?.hostUid !== uid() && p.uid !== uid()) throw new SharedError('No pudimos quitar a esa persona.');
+    const t = db.tables[p.pupuseadaId];
+    const allowed =
+      t?.hostUid === uid() || p.uid === uid() || (p.managedBy === uid() && p.uid === null && t?.status === 'ordering');
+    if (!allowed) throw new SharedError('No pudimos quitar a esa persona.');
     delete db.participants[participantId];
     write(db);
   },
@@ -155,6 +168,14 @@ export const memoryBackend: SharedBackend = {
     const db = read();
     if (db.tables[tableId]?.hostUid !== uid()) throw new SharedError('No pudimos cambiar el estado de la mesa.');
     db.tables[tableId].status = status;
+    write(db);
+  },
+
+  async setAccounts(tableId, billing, payment) {
+    await delay();
+    const db = read();
+    if (db.tables[tableId]?.hostUid !== uid()) throw new SharedError('Solo el anfitrión puede hacer las cuentas de la mesa.');
+    db.tables[tableId] = { ...db.tables[tableId], billing, payment };
     write(db);
   },
 

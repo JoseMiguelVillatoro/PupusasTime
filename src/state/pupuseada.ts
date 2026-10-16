@@ -6,7 +6,7 @@ import type {
   PlaceRestaurant,
   PupusaItem,
 } from '@/data/pupusa';
-import { pruneGroups } from '@/data/consolidation';
+import { pruneGroups, type PhoneOwnership } from '@/data/consolidation';
 import type { Seat, TableSnapshot, TableStatus } from '@/shared/backend';
 
 /**
@@ -46,8 +46,10 @@ export interface SharedInfo {
   myUid: string;
   hostUid: string;
   status: TableStatus;
-  /** Por participante: su teléfono (null = sin teléfono) y si ya terminó de pedir. */
-  meta: Record<string, { uid: string | null; done: boolean }>;
+  /** Por participante: su teléfono (null = sin teléfono), quién pide por él y si ya terminó. */
+  meta: Record<string, { uid: string | null; managedBy: string | null; done: boolean }>;
+  /** El anfitrión ya publicó las cuentas: todos ven el mismo resultado. */
+  accountsPublished?: boolean;
 }
 
 export interface PupuseadaState {
@@ -141,7 +143,22 @@ export const isHost = (s: PupuseadaState) => Boolean(s.shared && s.shared.hostUi
 export function canEdit(s: PupuseadaState, personId: string): boolean {
   if (!s.shared) return true;
   if (isHost(s)) return true;
-  return personId === s.shared.myParticipantId && s.shared.status === 'ordering';
+  return s.shared.meta[personId]?.managedBy === s.shared.myUid && s.shared.status === 'ordering';
+}
+
+/** Para "Cada teléfono paga lo suyo": a qué teléfono pertenece cada persona. */
+export function phoneOwnership(s: PupuseadaState): PhoneOwnership | undefined {
+  const shared = s.shared;
+  if (!shared) return undefined;
+  const phoneOf: Record<string, string> = {};
+  const phoneName: Record<string, string> = {};
+  for (const p of s.people) {
+    const m: SharedInfo['meta'][string] | undefined = shared.meta[p.id];
+    const phone: string = m?.managedBy ?? m?.uid ?? shared.hostUid;
+    phoneOf[p.id] = phone;
+    if (m?.uid && m.uid === phone) phoneName[phone] = p.name;
+  }
+  return { phoneOf, phoneName };
 }
 
 function applySnapshot(state: PupuseadaState, shared: SharedInfo, snapshot: TableSnapshot): PupuseadaState {
@@ -151,17 +168,41 @@ function applySnapshot(state: PupuseadaState, shared: SharedInfo, snapshot: Tabl
     items: p.items,
     extras: p.extras,
   }));
-  const meta = Object.fromEntries(snapshot.participants.map((p) => [p.id, { uid: p.uid, done: p.done }]));
+  const meta = Object.fromEntries(
+    snapshot.participants.map((p) => [p.id, { uid: p.uid, managedBy: p.managedBy, done: p.done }])
+  );
+  // Las cuentas las decide el anfitrión: los demás teléfonos copian lo que publicó.
+  const host = shared.myUid === snapshot.hostUid;
+  const accounts =
+    !host && snapshot.billing
+      ? {
+          billing: snapshot.billing.method,
+          groups: snapshot.billing.groups,
+          payment: snapshot.payment
+            ? { ...state.payment, ...snapshot.payment, step: snapshot.payment.published ? ('result' as const) : state.payment.step }
+            : state.payment,
+        }
+      : host && !state.billing && snapshot.billing
+        ? { billing: snapshot.billing.method, groups: snapshot.billing.groups, payment: state.payment }
+        : null;
   const stillThere = state.currentPersonId && people.some((p) => p.id === state.currentPersonId);
   const editingGone = !stillThere && (state.screen === 'order' || state.screen === 'personSummary');
   return {
     ...state,
     people,
-    groups: pruneGroups(state.groups, people),
+    billing: accounts ? accounts.billing : state.billing,
+    groups: pruneGroups(accounts ? accounts.groups : state.groups, people),
+    payment: accounts ? accounts.payment : state.payment,
     restaurant: snapshot.restaurant
       ? { id: snapshot.restaurant.placeId, placeId: snapshot.restaurant.placeId, name: snapshot.restaurant.name, address: '' }
       : state.restaurant,
-    shared: { ...shared, status: snapshot.status, hostUid: snapshot.hostUid, meta },
+    shared: {
+      ...shared,
+      status: snapshot.status,
+      hostUid: snapshot.hostUid,
+      meta,
+      accountsPublished: Boolean(snapshot.payment?.published),
+    },
     currentPersonId: stillThere ? state.currentPersonId : null,
     screen: editingGone ? 'lobby' : state.screen,
   };
@@ -223,7 +264,10 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
         p.id === state.currentPersonId ? { ...p, items: action.items, extras: action.extras } : p
       );
       if (state.shared) {
-        const meta = { ...state.shared.meta, [state.currentPersonId]: { ...state.shared.meta[state.currentPersonId], done: true } };
+        const meta = {
+          ...state.shared.meta,
+          [state.currentPersonId]: { ...state.shared.meta[state.currentPersonId], done: true },
+        };
         return {
           ...state,
           people,

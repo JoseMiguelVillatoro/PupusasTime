@@ -15,6 +15,8 @@ interface Props {
   onToggleTheme: () => void;
   people: PersonOrder[];
   initialGroups: AccountGroup[];
+  /** Mesa compartida: ofrece "Cada teléfono paga lo suyo", con el detalle de cada cuenta. */
+  phoneAccounts?: { name: string; count: number }[];
 }
 
 const genGroupId = () => `grp-${newId()}`;
@@ -27,10 +29,11 @@ export function BillingScreen({
   onToggleTheme,
   people,
   initialGroups,
+  phoneAccounts,
 }: Props) {
   const personIds = people.map((p) => p.id);
   const nameOf = (pid: string) => people.find((p) => p.id === pid)?.name ?? '';
-  const [selected, onSelect] = useState<BillingMethod | null>(initialSelected);
+  const [selected, onSelect] = useState<BillingMethod | null>(initialSelected ?? (phoneAccounts ? 'byPhone' : null));
   const [groups, setGroups] = useState<AccountGroup[]>(initialGroups);
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState('');
@@ -91,12 +94,23 @@ export function BillingScreen({
   };
 
   const options: { id: BillingMethod; emoji: string; title: string; subtitle: string }[] = [
+    ...(phoneAccounts
+      ? [
+          {
+            id: 'byPhone' as const,
+            emoji: '📱',
+            title: 'Cada teléfono paga lo suyo',
+            subtitle: phoneAccounts.map((a) => `${a.name} (${a.count})`).join(' · '),
+          },
+        ]
+      : []),
     { id: 'single', emoji: '🧾', title: 'Una sola cuenta', subtitle: 'Todo junto' },
     { id: 'split', emoji: '👤', title: 'Cada quien paga lo suyo', subtitle: 'Dividir por persona' },
     { id: 'groups', emoji: '👥', title: 'Varias cuentas', subtitle: 'Agrupar personas en diferentes cuentas' },
   ];
 
   const canContinue =
+    selected === 'byPhone' ||
     selected === 'single' ||
     selected === 'split' ||
     (selected === 'groups' && groups.length > 0 && unassigned.length === 0);

@@ -5,6 +5,8 @@ import {
   type Seat,
   type SharedBackend,
   type SharedParticipant,
+  type SharedBilling,
+  type SharedPayment,
   type SharedRestaurant,
   type TableSnapshot,
   type TableStatus,
@@ -28,6 +30,7 @@ function sb(): SupabaseClient {
 interface ParticipantRow {
   id: string;
   uid: string | null;
+  managed_by: string | null;
   name: string;
   items: SharedParticipant['items'];
   extras: SharedParticipant['extras'];
@@ -38,6 +41,7 @@ interface ParticipantRow {
 const toParticipant = (r: ParticipantRow): SharedParticipant => ({
   id: r.id,
   uid: r.uid,
+  managedBy: r.managed_by,
   name: r.name,
   items: Array.isArray(r.items) ? r.items : [],
   extras: Array.isArray(r.extras) ? r.extras : [],
@@ -79,10 +83,10 @@ export const supabaseBackend: SharedBackend = {
 
   async loadTable(pupuseadaId) {
     const [table, people] = await Promise.all([
-      sb().from('pupuseadas').select('id, code, host_uid, status, restaurant').eq('id', pupuseadaId).maybeSingle(),
+      sb().from('pupuseadas').select('id, code, host_uid, status, restaurant, billing, payment').eq('id', pupuseadaId).maybeSingle(),
       sb()
         .from('participants')
-        .select('id, uid, name, items, extras, done, created_at')
+        .select('id, uid, managed_by, name, items, extras, done, created_at')
         .eq('pupuseada_id', pupuseadaId)
         .order('created_at', { ascending: true }),
     ]);
@@ -94,6 +98,8 @@ export const supabaseBackend: SharedBackend = {
       hostUid: table.data.host_uid,
       status: table.data.status as TableStatus,
       restaurant: (table.data.restaurant as SharedRestaurant | null) ?? null,
+      billing: (table.data.billing as SharedBilling | null) ?? null,
+      payment: (table.data.payment as SharedPayment | null) ?? null,
       participants: (people.data as ParticipantRow[]).map(toParticipant),
     } satisfies TableSnapshot;
   },
@@ -125,6 +131,15 @@ export const supabaseBackend: SharedBackend = {
   async setStatus(pupuseadaId, status) {
     const { error } = await sb().from('pupuseadas').update({ status }).eq('id', pupuseadaId);
     if (error) throw friendly(error, 'No pudimos cambiar el estado de la mesa.');
+  },
+
+  async setAccounts(pupuseadaId, billing, payment) {
+    const { error, count } = await sb()
+      .from('pupuseadas')
+      .update({ billing, payment }, { count: 'exact' })
+      .eq('id', pupuseadaId);
+    if (error) throw friendly(error, 'No pudimos guardar las cuentas para la mesa.');
+    if (count === 0) throw new SharedError('Solo el anfitrión puede hacer las cuentas de la mesa.');
   },
 
   subscribe(pupuseadaId, onChange) {

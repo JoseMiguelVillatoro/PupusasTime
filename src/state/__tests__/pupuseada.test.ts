@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { reducer, initialState, canEdit, isHost, type Action, type PupuseadaState } from '../pupuseada';
+import { reducer, initialState, canEdit, isHost, phoneOwnership, type Action, type PupuseadaState } from '../pupuseada';
+import { accountsFor } from '@/data/consolidation';
 import type { TableSnapshot } from '@/shared/backend';
 import type { PupusaItem } from '@/data/pupusa';
 
@@ -104,9 +105,11 @@ describe('mesa compartida', () => {
     hostUid: host,
     status: 'ordering',
     restaurant: { name: 'El Comal', placeId: 'manual:el-comal' },
+    billing: null,
+    payment: null,
     participants: [
-      { id: 'p-ana', uid: host, name: 'Ana', items: [], extras: [], done: false, createdAt: '1' },
-      { id: 'p-beto', uid: guest, name: 'Beto', items: items(2), extras: [], done: true, createdAt: '2' },
+      { id: 'p-ana', uid: host, managedBy: host, name: 'Ana', items: [], extras: [], done: false, createdAt: '1' },
+      { id: 'p-beto', uid: guest, managedBy: guest, name: 'Beto', items: items(2), extras: [], done: true, createdAt: '2' },
     ],
     ...over,
   });
@@ -163,5 +166,78 @@ describe('mesa compartida', () => {
   it('ignora cambios de otra mesa', () => {
     const s = enter(guest, 'p-beto');
     expect(reducer(s, { type: 'SHARED_SYNC', snapshot: snap({ id: 'otra' }) })).toBe(s);
+  });
+});
+
+describe('cuentas por teléfono y cuentas compartidas', () => {
+  const host = 'uid-javier';
+  const primo = 'uid-primo';
+  const p = (id: string, name: string, uid: string | null, managedBy: string, n: number) => ({
+    id, uid, managedBy, name, items: items(n), extras: [], done: true, createdAt: id,
+  });
+  const snapshot = (over: Partial<TableSnapshot> = {}): TableSnapshot => ({
+    id: 'mesa',
+    code: 'ABCDE',
+    hostUid: host,
+    status: 'locked',
+    restaurant: null,
+    billing: null,
+    payment: null,
+    participants: [
+      p('1', 'Javier', host, host, 2),
+      p('2', 'Amiga', null, host, 1),
+      p('3', 'Primo', primo, primo, 3),
+      p('4', 'Prima', null, primo, 2),
+      p('5', 'Tío', null, primo, 1),
+    ],
+    ...over,
+  });
+  const enter = (myUid: string, me: string, snap = snapshot()) =>
+    reducer(initialState(0, 't'), {
+      type: 'SHARED_ENTER',
+      seat: { pupuseadaId: 'mesa', participantId: me, code: 'ABCDE' },
+      myUid,
+      snapshot: snap,
+    });
+
+  it('arma una cuenta por teléfono con su gente: 2 y 3 personas', () => {
+    const s = enter(host, '1');
+    const groups = accountsFor('byPhone', s.people, [], phoneOwnership(s));
+    expect(groups.map((g) => [g.name, g.personIds.length])).toEqual([
+      ['Cuenta de Javier', 2],
+      ['Cuenta de Primo', 3],
+    ]);
+  });
+
+  it('el primo puede pedir por los suyos pero no por la amiga de Javier', () => {
+    const s = enter(primo, '3', snapshot({ status: 'ordering' }));
+    expect(canEdit(s, '4')).toBe(true);
+    expect(canEdit(s, '2')).toBe(false);
+  });
+
+  it('el invitado ve las cuentas que publicó el anfitrión, no las propias', () => {
+    const published = snapshot({
+      billing: { method: 'byPhone', groups: [] },
+      payment: { priceInputs: {}, uniformPrice: true, uniformInput: '0.75', hasTip: false, tipInput: '', published: true },
+    });
+    let s = enter(primo, '3', snapshot());
+    s = reducer(s, { type: 'UPDATE_PAYMENT', patch: { uniformPrice: true, uniformInput: '0.10' } });
+    s = reducer(s, { type: 'SHARED_SYNC', snapshot: published });
+    expect(s.billing).toBe('byPhone');
+    expect(s.payment.uniformInput).toBe('0.75');
+    expect(s.payment.step).toBe('result');
+    expect(s.shared?.accountsPublished).toBe(true);
+  });
+
+  it('el anfitrión no pierde lo que está escribiendo cuando llega una sincronización', () => {
+    let s = enter(host, '1');
+    s = reducer(s, { type: 'SET_BILLING', billing: 'byPhone', groups: [] });
+    s = reducer(s, { type: 'UPDATE_PAYMENT', patch: { uniformInput: '0.80' } });
+    s = reducer(s, {
+      type: 'SHARED_SYNC',
+      snapshot: snapshot({ billing: { method: 'single', groups: [] }, payment: { priceInputs: {}, uniformPrice: true, uniformInput: '0.75', hasTip: false, tipInput: '', published: true } }),
+    });
+    expect(s.billing).toBe('byPhone');
+    expect(s.payment.uniformInput).toBe('0.80');
   });
 });

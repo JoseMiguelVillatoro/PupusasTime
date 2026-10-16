@@ -23,6 +23,8 @@ interface Props {
   onEditPerson: (personId: string) => void;
   onEditPeople: () => void;
   onOpenPayment: () => void;
+  /** Mesa compartida, teléfono invitado: las cuentas las hace el anfitrión. */
+  guestAccounts?: { hostName: string; published: boolean };
   onFinish: () => void;
   theme: Theme;
   onToggleTheme: () => void;
@@ -57,6 +59,7 @@ export function FinalSummaryScreen({
   onEditPerson,
   onEditPeople,
   onOpenPayment,
+  guestAccounts,
   onFinish,
   theme,
   onToggleTheme,
@@ -221,13 +224,31 @@ export function FinalSummaryScreen({
         {/* Cuentas */}
         <section className="rounded-2xl bg-terracotta-50 dark:bg-terracotta-700/20 border-2 border-terracotta-200 dark:border-terracotta-600/30 p-5 text-center">
           <Calculator className="w-8 h-8 text-terracotta-500 mx-auto mb-3" />
-          <p className="font-display text-lg font-bold text-charcoal-900 dark:text-cream-50 mb-1">¿Hacemos las cuentas?</p>
-          <p className="text-sm text-charcoal-700 dark:text-cream-200 mb-4">
-            Elegí cómo van a pagar y calculamos cuánto le toca a cada quien, propina incluida.
-          </p>
-          <Button variant="secondary" onClick={onOpenPayment}>
-            Sí, hacer las cuentas →
-          </Button>
+          {guestAccounts ? (
+            <>
+              <p className="font-display text-lg font-bold text-charcoal-900 dark:text-cream-50 mb-1">
+                {guestAccounts.published ? '¡Ya están las cuentas!' : 'Las cuentas las hace ' + guestAccounts.hostName}
+              </p>
+              <p className="text-sm text-charcoal-700 dark:text-cream-200 mb-4">
+                {guestAccounts.published
+                  ? 'Mirá cuánto te toca. Todos en la mesa ven lo mismo.'
+                  : 'Cuando ponga los precios, te aparece aquí cuánto te toca.'}
+              </p>
+              <Button variant="secondary" onClick={onOpenPayment} disabled={!guestAccounts.published}>
+                {guestAccounts.published ? 'Ver cuánto me toca →' : 'Esperando las cuentas…'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="font-display text-lg font-bold text-charcoal-900 dark:text-cream-50 mb-1">¿Hacemos las cuentas?</p>
+              <p className="text-sm text-charcoal-700 dark:text-cream-200 mb-4">
+                Elegí cómo van a pagar y calculamos cuánto le toca a cada quien, propina incluida.
+              </p>
+              <Button variant="secondary" onClick={onOpenPayment}>
+                Sí, hacer las cuentas →
+              </Button>
+            </>
+          )}
         </section>
 
         {/* Nueva pupuseada, con confirmación */}

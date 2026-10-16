@@ -17,6 +17,7 @@ import {
   whatsappShareUrl,
   type AccountBreakdown,
   type Cents,
+  type PhoneOwnership,
 } from '@/data/consolidation';
 import type { PaymentDraft } from '@/state/pupuseada';
 import { loadPrices, savePrices } from '@/state/storage';
@@ -32,6 +33,15 @@ interface Props {
   onChange: (patch: Partial<PaymentDraft>) => void;
   onBack: () => void;
   onBackToSummary: () => void;
+  /** Mesa compartida: a qué teléfono pertenece cada persona (para "cada teléfono paga lo suyo"). */
+  phones?: PhoneOwnership;
+  /** Invitado en una mesa compartida: solo ve lo que publicó el anfitrión. */
+  readOnly?: boolean;
+  /** Anfitrión de una mesa compartida: publica las cuentas para todos al calcular. */
+  onPublish?: () => void;
+  /** Cuentas que incluyen a quien usa este teléfono, para resaltarlas. */
+  myPersonIds?: string[];
+  hostName?: string;
   theme: Theme;
   onToggleTheme: () => void;
 }
@@ -62,17 +72,24 @@ function MoneyInput({ id, value, onChange, label }: { id: string; value: string;
   );
 }
 
-function AccountDetail({ a, prices }: { a: AccountBreakdown; prices: Record<string, Cents> }) {
-  const [open, setOpen] = useState(false);
+function AccountDetail({ a, prices, mine = false }: { a: AccountBreakdown; prices: Record<string, Cents>; mine?: boolean }) {
+  const [open, setOpen] = useState(mine);
   return (
-    <div className="rounded-2xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 overflow-hidden">
+    <div
+      className={`rounded-2xl overflow-hidden border ${
+        mine ? 'bg-white dark:bg-night-200 border-terracotta-400 ring-1 ring-terracotta-300' : 'bg-cream-50 dark:bg-night-300 border-cream-200 dark:border-night-100'
+      }`}
+    >
       <button
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         className="w-full flex items-center gap-3 p-4 text-left no-tap-highlight"
       >
         <div className="flex-1 min-w-0">
-          <p className="font-bold text-charcoal-900 dark:text-cream-50 truncate">{a.groupName}</p>
+          <p className="font-bold text-charcoal-900 dark:text-cream-50 truncate">
+            {a.groupName}
+            {mine && <span className="font-semibold text-terracotta-600 dark:text-terracotta-300"> · la tuya</span>}
+          </p>
           <p className="text-sm text-charcoal-700 dark:text-cream-200 truncate">
             {a.personNames.length > 1 ? `${a.personNames.join(', ')} · ` : ''}
             {a.totalPupusas} {a.totalPupusas === 1 ? 'pupusa' : 'pupusas'}
@@ -125,6 +142,11 @@ export function PaymentScreen({
   onChange,
   onBack,
   onBackToSummary,
+  phones,
+  readOnly = false,
+  onPublish,
+  myPersonIds = [],
+  hostName,
   theme,
   onToggleTheme,
 }: Props) {
@@ -134,7 +156,7 @@ export function PaymentScreen({
   const consolidated = consolidateOrders(orders);
   const extras = consolidateExtras(orders);
   const extrasCents = extras.reduce((s, x) => s + x.cents, 0);
-  const accounts = useMemo(() => accountsFor(billing, orders, groups), [billing, orders, groups]);
+  const accounts = useMemo(() => accountsFor(billing, orders, groups, phones), [billing, orders, groups, phones]);
 
   const orderedTypes: PupusaType[] = Array.from(
     new Map([...consolidated.maiz, ...consolidated.arroz].map((e) => [e.pupusaTypeId, PUPUSA_BY_ID[e.pupusaTypeId]])).values()
@@ -143,7 +165,7 @@ export function PaymentScreen({
   // Precios recordados de la última vez en esta pupusería.
   useEffect(() => {
     const nothingTyped = Object.keys(draft.priceInputs).length === 0 && !draft.uniformInput;
-    if (!nothingTyped) return;
+    if (!nothingTyped || readOnly) return;
     const saved = loadPrices(restaurant);
     if (!saved) return;
     onChange({ priceInputs: saved.priceInputs, uniformPrice: saved.uniformPrice, uniformInput: saved.uniformInput });
@@ -161,7 +183,10 @@ export function PaymentScreen({
   const tipPercent = draft.hasTip ? Number(draft.tipInput.replace(',', '.')) || 0 : 0;
   const tipValid = draft.hasTip === false || (draft.hasTip === true && tipPercent > 0 && tipPercent <= 100);
 
-  const result = draft.step === 'result' ? calculatePayment(orders, accounts, priceCentsByType, tipPercent) : null;
+  const showResult = draft.step === 'result' && (!readOnly || allPricesValid);
+  const result = showResult ? calculatePayment(orders, accounts, priceCentsByType, tipPercent) : null;
+  const mine = new Set(myPersonIds);
+  const groupsById = new Map(accounts.map((g) => [g.id, g]));
 
   const goToResult = () => {
     savePrices(restaurant, {
@@ -170,6 +195,7 @@ export function PaymentScreen({
       uniformInput: draft.uniformInput,
     });
     onChange({ step: 'result' });
+    onPublish?.();
   };
 
   const restaurantName = restaurant?.name ?? null;
@@ -182,15 +208,28 @@ export function PaymentScreen({
     setTimeout(() => setCopied(false), 2500);
   };
 
-  const backAction = draft.step === 'price' ? onBack : () => onChange({ step: draft.step === 'result' ? 'tip' : 'price' });
+  const backAction =
+    readOnly ? onBackToSummary : draft.step === 'price' ? onBack : () => onChange({ step: draft.step === 'result' ? 'tip' : 'price' });
 
   return (
     <div className="min-h-screen flex flex-col">
       <TopBar onBack={backAction} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
 
       <div className="flex-1 px-5 pt-2 space-y-6 overflow-y-auto pb-40">
+        {readOnly && !result && (
+          <div className="animate-fadeIn text-center py-10 space-y-3" role="status">
+            <p className="font-display text-2xl font-bold text-charcoal-900 dark:text-cream-50">Todavía no hay cuentas</p>
+            <p className="text-charcoal-700 dark:text-cream-200">
+              {hostName ?? 'El anfitrión'} pone los precios y la propina. Cuando calcule, te aparece aquí cuánto te toca.
+            </p>
+            <Button variant="secondary" onClick={onBackToSummary}>
+              Volver al pedido
+            </Button>
+          </div>
+        )}
+
         {/* Paso 1: precios */}
-        {draft.step === 'price' && (
+        {!readOnly && draft.step === 'price' && (
           <div className="animate-fadeIn">
             <h2 className="font-display text-2xl font-bold text-charcoal-900 dark:text-cream-50 mb-1">¿Cuánto cuesta cada pupusa?</h2>
             <p className="text-sm text-charcoal-700 dark:text-cream-200 mb-4">Maíz y arroz llevan el mismo precio.</p>
@@ -252,7 +291,7 @@ export function PaymentScreen({
         )}
 
         {/* Paso 2: propina */}
-        {draft.step === 'tip' && (
+        {!readOnly && draft.step === 'tip' && (
           <div className="animate-fadeIn">
             <h2 className="font-display text-2xl font-bold text-charcoal-900 dark:text-cream-50 mb-3">¿Dejamos propina?</h2>
             <div className="grid grid-cols-2 gap-3 mb-4">
@@ -311,11 +350,19 @@ export function PaymentScreen({
         )}
 
         {/* Paso 3: resultado */}
-        {draft.step === 'result' && result && (
+        {result && (
           <div className="animate-fadeIn space-y-5">
             <div>
               <h2 className="font-display text-2xl font-bold text-charcoal-900 dark:text-cream-50">¿Cuánto paga cada quien?</h2>
-              <div className="flex flex-wrap gap-2 mt-3">
+              {readOnly && (
+                <p className="text-sm text-charcoal-700 dark:text-cream-200 mt-1">
+                  Cuentas hechas por {hostName ?? 'el anfitrión'}: todos en la mesa ven lo mismo.
+                </p>
+              )}
+              {!readOnly && onPublish && (
+                <p className="text-sm text-charcoal-700 dark:text-cream-200 mt-1">Todos en la mesa ven estas cuentas en su teléfono.</p>
+              )}
+              <div className={`flex flex-wrap gap-2 mt-3 ${readOnly ? 'hidden' : ''}`}>
                 <button
                   onClick={() => onChange({ step: 'price' })}
                   className="inline-flex items-center gap-1.5 min-h-[36px] px-3 rounded-full bg-white dark:bg-night-300 border border-cream-200 dark:border-night-100 text-sm font-bold text-charcoal-800 dark:text-cream-100 no-tap-highlight"
@@ -335,7 +382,12 @@ export function PaymentScreen({
 
             <div className="space-y-2.5">
               {result.accounts.map((a) => (
-                <AccountDetail key={a.groupId} a={a} prices={result.priceCentsByType} />
+                <AccountDetail
+                  key={a.groupId}
+                  a={a}
+                  prices={result.priceCentsByType}
+                  mine={readOnly && groupsById.get(a.groupId)?.personIds.some((id) => mine.has(id))}
+                />
               ))}
             </div>
 

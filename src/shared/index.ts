@@ -27,6 +27,7 @@ export const backend: SharedBackend = {
   addOffline: (...a) => load().then((b) => b.addOffline(...a)),
   removeParticipant: (...a) => load().then((b) => b.removeParticipant(...a)),
   setStatus: (...a) => load().then((b) => b.setStatus(...a)),
+  setAccounts: (...a) => load().then((b) => b.setAccounts(...a)),
   subscribe(pupuseadaId, onChange) {
     let unsubscribe: (() => void) | null = null;
     let cancelled = false;
