@@ -25,9 +25,10 @@ Todo se guarda en `localStorage`, sin cuentas ni servidor:
 
 - React 18 + TypeScript + Vite + Tailwind CSS
 - Vercel: hosting y una Vercel Function (`api/places-search.ts`) como proxy a Google Places
+- Supabase: mesa compartida en tiempo real, con usuarios anónimos y RLS (`supabase/migrations/`)
 - Vitest para la lógica de pedidos y pagos
 
-Todo vive en este repo: no depende de Bolt ni de Supabase.
+Todo vive en este repo. La pupuseada compartida (varios teléfonos) usa Supabase.
 
 ## Desarrollo
 
@@ -64,6 +65,16 @@ blindar el costo, en Google Cloud también conviene:
 
 - Restringir la API key a **Places API (New)**.
 - Poner una **cuota diaria** de requests y una **alerta de presupuesto**.
+
+## Pupuseada compartida (Supabase)
+
+Quien abre la mesa comparte un código de 5 letras, un link (`/?mesa=CODIGO`) o un QR. Cada quien pide desde su teléfono, sin crear cuenta, y todos ven el pedido en vivo.
+
+- **Base de datos:** `supabase/migrations/20261016000000_pupuseada_compartida.sql`. Se pega entero en Supabase → SQL Editor → Run, y se puede correr más de una vez.
+- **Supabase:** en *Authentication*, activar **Allow anonymous sign-ins**.
+- **Conexión:** la URL y la llave publicable están en `src/shared/supabaseBackend.ts`. No son secretas; se pueden cambiar con `VITE_SUPABASE_URL` y `VITE_SUPABASE_PUBLISHABLE_KEY`.
+- **Permisos (RLS):** solo los miembros ven su mesa. Cada quien edita solo su pedido mientras la mesa está abierta. El anfitrión agrega personas sin teléfono, edita a cualquiera y cierra el pedido.
+- **Probar sin Supabase:** `VITE_SHARED_BACKEND=memory npm run dev` usa un backend simulado en el navegador, donde cada pestaña hace de un teléfono distinto.
 
 ## Arquitectura
 

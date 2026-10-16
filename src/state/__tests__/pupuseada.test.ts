@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { reducer, initialState, type Action, type PupuseadaState } from '../pupuseada';
+import { reducer, initialState, canEdit, isHost, type Action, type PupuseadaState } from '../pupuseada';
+import type { TableSnapshot } from '@/shared/backend';
 import type { PupusaItem } from '@/data/pupusa';
 
 const run = (actions: Action[], from: PupuseadaState = initialState(0, 'test')) => actions.reduce(reducer, from);
@@ -91,5 +92,76 @@ describe('flujo de la pupuseada', () => {
   it('una lista de nombres vacía no borra a nadie', () => {
     const s = run([{ type: 'START' }, { type: 'SET_PEOPLE', people: [{ name: 'Ana' }] }]);
     expect(reducer(s, { type: 'SET_PEOPLE', people: [{ name: '  ' }] })).toBe(s);
+  });
+});
+
+describe('mesa compartida', () => {
+  const host = 'uid-ana';
+  const guest = 'uid-beto';
+  const snap = (over: Partial<TableSnapshot> = {}): TableSnapshot => ({
+    id: 'mesa-1',
+    code: 'K7Q2X',
+    hostUid: host,
+    status: 'ordering',
+    restaurant: { name: 'El Comal', placeId: 'manual:el-comal' },
+    participants: [
+      { id: 'p-ana', uid: host, name: 'Ana', items: [], extras: [], done: false, createdAt: '1' },
+      { id: 'p-beto', uid: guest, name: 'Beto', items: items(2), extras: [], done: true, createdAt: '2' },
+    ],
+    ...over,
+  });
+  const enter = (myUid: string, me: string) =>
+    reducer(initialState(0, 't'), {
+      type: 'SHARED_ENTER',
+      seat: { pupuseadaId: 'mesa-1', participantId: me, code: 'K7Q2X' },
+      myUid,
+      snapshot: snap(),
+    });
+
+  it('al entrar trae a la gente y la pupusería de la mesa', () => {
+    const s = enter(guest, 'p-beto');
+    expect(s.screen).toBe('lobby');
+    expect(s.people.map((p) => p.name)).toEqual(['Ana', 'Beto']);
+    expect(s.people[1].items[0].quantity).toBe(2);
+    expect(s.restaurant?.name).toBe('El Comal');
+    expect(isHost(s)).toBe(false);
+  });
+
+  it('el invitado solo puede editar lo suyo, y nada si la mesa cerró', () => {
+    let s = enter(guest, 'p-beto');
+    expect(canEdit(s, 'p-beto')).toBe(true);
+    expect(canEdit(s, 'p-ana')).toBe(false);
+    expect(reducer(s, { type: 'OPEN_ORDER_FOR', personId: 'p-ana' })).toBe(s);
+    s = reducer(s, { type: 'SHARED_SYNC', snapshot: snap({ status: 'locked' }) });
+    expect(canEdit(s, 'p-beto')).toBe(false);
+  });
+
+  it('el anfitrión puede editar a cualquiera, incluso con la mesa cerrada', () => {
+    let s = enter(host, 'p-ana');
+    s = reducer(s, { type: 'SHARED_SYNC', snapshot: snap({ status: 'locked' }) });
+    expect(isHost(s)).toBe(true);
+    expect(canEdit(s, 'p-beto')).toBe(true);
+  });
+
+  it('guardar mi pedido vuelve a la mesa y me marca como listo', () => {
+    let s = enter(guest, 'p-beto');
+    s = reducer(s, { type: 'OPEN_ORDER_FOR', personId: 'p-beto' });
+    expect(s.screen).toBe('order');
+    s = reducer(s, { type: 'SAVE_ORDER', items: items(4), extras: [] });
+    expect(s.screen).toBe('lobby');
+    expect(s.shared?.meta['p-beto'].done).toBe(true);
+  });
+
+  it('si quitan a quien estaba editando, vuelve a la mesa', () => {
+    let s = enter(host, 'p-ana');
+    s = reducer(s, { type: 'OPEN_ORDER_FOR', personId: 'p-beto' });
+    s = reducer(s, { type: 'SHARED_SYNC', snapshot: snap({ participants: snap().participants.slice(0, 1) }) });
+    expect(s.screen).toBe('lobby');
+    expect(s.currentPersonId).toBeNull();
+  });
+
+  it('ignora cambios de otra mesa', () => {
+    const s = enter(guest, 'p-beto');
+    expect(reducer(s, { type: 'SHARED_SYNC', snapshot: snap({ id: 'otra' }) })).toBe(s);
   });
 });

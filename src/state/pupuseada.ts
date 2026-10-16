@@ -7,6 +7,7 @@ import type {
   PupusaItem,
 } from '@/data/pupusa';
 import { pruneGroups } from '@/data/consolidation';
+import type { Seat, TableSnapshot, TableStatus } from '@/shared/backend';
 
 /**
  * Todo el estado de una pupuseada vive aquí y cambia solo a través del reducer.
@@ -21,7 +22,9 @@ export type Screen =
   | 'personSummary'
   | 'final'
   | 'billing'
-  | 'payment';
+  | 'payment'
+  | 'join'
+  | 'lobby';
 
 export type PaymentStep = 'price' | 'tip' | 'result';
 
@@ -33,6 +36,18 @@ export interface PaymentDraft {
   uniformInput: string;
   hasTip: boolean | null;
   tipInput: string;
+}
+
+/** Datos de la mesa compartida cuando la pupuseada se pide desde varios teléfonos. */
+export interface SharedInfo {
+  pupuseadaId: string;
+  code: string;
+  myParticipantId: string;
+  myUid: string;
+  hostUid: string;
+  status: TableStatus;
+  /** Por participante: su teléfono (null = sin teléfono) y si ya terminó de pedir. */
+  meta: Record<string, { uid: string | null; done: boolean }>;
 }
 
 export interface PupuseadaState {
@@ -49,6 +64,10 @@ export interface PupuseadaState {
   billing: BillingMethod | null;
   groups: AccountGroup[];
   payment: PaymentDraft;
+  /** null = un solo teléfono. Puede faltar en estados guardados por versiones anteriores. */
+  shared?: SharedInfo | null;
+  /** Código que llegó por link (?mesa=…), para prellenar la pantalla de unirse. */
+  pendingCode?: string;
 }
 
 export interface PersonDraft {
@@ -71,7 +90,11 @@ export type Action =
   | { type: 'OPEN_BILLING' }
   | { type: 'SET_BILLING'; billing: BillingMethod; groups: AccountGroup[] }
   | { type: 'UPDATE_PAYMENT'; patch: Partial<PaymentDraft> }
-  | { type: 'RESET' };
+  | { type: 'RESET' }
+  | { type: 'OPEN_JOIN'; code?: string }
+  | { type: 'SHARED_ENTER'; seat: Seat; myUid: string; snapshot: TableSnapshot }
+  | { type: 'SHARED_SYNC'; snapshot: TableSnapshot }
+  | { type: 'OPEN_ORDER_FOR'; personId: string };
 
 export function newId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -106,6 +129,41 @@ export function initialState(now = Date.now(), id = newId()): PupuseadaState {
     billing: null,
     groups: [],
     payment: emptyPayment(),
+    shared: null,
+  };
+}
+
+export const isShared = (s: PupuseadaState): s is PupuseadaState & { shared: SharedInfo } => Boolean(s.shared);
+
+export const isHost = (s: PupuseadaState) => Boolean(s.shared && s.shared.hostUid === s.shared.myUid);
+
+/** Mientras la mesa está abierta, cada quien edita lo suyo; el anfitrión puede editar a cualquiera siempre. */
+export function canEdit(s: PupuseadaState, personId: string): boolean {
+  if (!s.shared) return true;
+  if (isHost(s)) return true;
+  return personId === s.shared.myParticipantId && s.shared.status === 'ordering';
+}
+
+function applySnapshot(state: PupuseadaState, shared: SharedInfo, snapshot: TableSnapshot): PupuseadaState {
+  const people: PersonOrder[] = snapshot.participants.map((p) => ({
+    id: p.id,
+    name: p.name,
+    items: p.items,
+    extras: p.extras,
+  }));
+  const meta = Object.fromEntries(snapshot.participants.map((p) => [p.id, { uid: p.uid, done: p.done }]));
+  const stillThere = state.currentPersonId && people.some((p) => p.id === state.currentPersonId);
+  const editingGone = !stillThere && (state.screen === 'order' || state.screen === 'personSummary');
+  return {
+    ...state,
+    people,
+    groups: pruneGroups(state.groups, people),
+    restaurant: snapshot.restaurant
+      ? { id: snapshot.restaurant.placeId, placeId: snapshot.restaurant.placeId, name: snapshot.restaurant.name, address: '' }
+      : state.restaurant,
+    shared: { ...shared, status: snapshot.status, hostUid: snapshot.hostUid, meta },
+    currentPersonId: stillThere ? state.currentPersonId : null,
+    screen: editingGone ? 'lobby' : state.screen,
   };
 }
 
@@ -164,6 +222,17 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
       const people = state.people.map((p) =>
         p.id === state.currentPersonId ? { ...p, items: action.items, extras: action.extras } : p
       );
+      if (state.shared) {
+        const meta = { ...state.shared.meta, [state.currentPersonId]: { ...state.shared.meta[state.currentPersonId], done: true } };
+        return {
+          ...state,
+          people,
+          shared: { ...state.shared, meta },
+          currentPersonId: null,
+          returnToFinal: false,
+          screen: state.returnToFinal ? 'final' : 'lobby',
+        };
+      }
       return { ...state, people, screen: 'personSummary' };
     }
 
@@ -184,6 +253,9 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
     }
 
     case 'ORDER_BACK': {
+      if (state.shared) {
+        return { ...state, screen: state.returnToFinal ? 'final' : 'lobby', currentPersonId: null, returnToFinal: false };
+      }
       if (state.returnToFinal) return { ...state, screen: 'final', currentPersonId: null, returnToFinal: false };
       const i = indexOfCurrent(state);
       if (i <= 0) return { ...state, screen: 'people' };
@@ -192,9 +264,11 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
 
     case 'EDIT_PERSON':
       if (!state.people.some((p) => p.id === action.personId)) return state;
+      if (!canEdit(state, action.personId)) return state;
       return { ...state, currentPersonId: action.personId, screen: 'order', returnToFinal: true };
 
     case 'EDIT_PEOPLE':
+      if (state.shared) return { ...state, screen: 'lobby', returnToFinal: false };
       return { ...state, screen: 'people', returnToFinal: true };
 
     case 'OPEN_BILLING':
@@ -214,6 +288,40 @@ export function reducer(state: PupuseadaState, action: Action): PupuseadaState {
 
     case 'RESET':
       return initialState();
+
+    case 'OPEN_JOIN':
+      return { ...initialState(), screen: 'join', pendingCode: action.code };
+
+    case 'SHARED_ENTER': {
+      const base: PupuseadaState = {
+        ...state,
+        screen: 'lobby',
+        people: [],
+        groups: [],
+        billing: null,
+        currentPersonId: null,
+        returnToFinal: false,
+        pendingCode: undefined,
+      };
+      const shared: SharedInfo = {
+        pupuseadaId: action.seat.pupuseadaId,
+        code: action.seat.code,
+        myParticipantId: action.seat.participantId,
+        myUid: action.myUid,
+        hostUid: action.snapshot.hostUid,
+        status: action.snapshot.status,
+        meta: {},
+      };
+      return applySnapshot(base, shared, action.snapshot);
+    }
+
+    case 'SHARED_SYNC':
+      if (!state.shared || action.snapshot.id !== state.shared.pupuseadaId) return state;
+      return applySnapshot(state, state.shared, action.snapshot);
+
+    case 'OPEN_ORDER_FOR':
+      if (!state.people.some((p) => p.id === action.personId) || !canEdit(state, action.personId)) return state;
+      return { ...state, currentPersonId: action.personId, screen: 'order', returnToFinal: false };
 
     default:
       return state;
