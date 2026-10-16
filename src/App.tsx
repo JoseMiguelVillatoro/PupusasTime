@@ -7,7 +7,7 @@ import { OrderScreen } from '@/screens/OrderScreen';
 import { PersonSummaryScreen } from '@/screens/PersonSummaryScreen';
 import { FinalSummaryScreen } from '@/screens/FinalSummaryScreen';
 import { PaymentScreen } from '@/screens/PaymentScreen';
-import { PaymentResult } from '@/data/consolidation';
+import { PaymentResult, pruneGroups } from '@/data/consolidation';
 import {
   PlaceRestaurant,
   BillingMethod,
@@ -85,7 +85,13 @@ export default function App() {
 
   const handlePeopleContinue = (names: string[]) => {
     setPeople(names);
-    setOrders(names.map((name) => ({ id: genId(), name, items: [] })));
+    // Conserva lo ya pedido por cada posición y descarta a quien se quitó.
+    setOrders((prev) =>
+      names.map((name, i) => ({ id: prev[i]?.id ?? genId(), name, items: prev[i]?.items ?? [] }))
+    );
+    setGroups((prev) => pruneGroups(prev, names.length));
+    setPaymentResult(null);
+    setPaymentStep('intro');
     setCurrentPersonIdx(0);
     setScreen('billing');
   };

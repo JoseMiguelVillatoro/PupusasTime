@@ -4,6 +4,7 @@ import { TopBar } from '@/components/TopBar';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { BillingMethod, AccountGroup } from '@/data/pupusa';
 import { Theme } from '@/hooks/useTheme';
+import { personIdFor } from '@/data/consolidation';
 import { Plus, X, Users, User, ChevronDown, Trash2, ArrowRight } from 'lucide-react';
 
 interface Props {
@@ -30,7 +31,7 @@ export function BillingScreen({
   people,
   initialGroups,
 }: Props) {
-  const personIds = people.map((_, i) => `p${i}`);
+  const personIds = people.map((_, i) => personIdFor(i));
   const [groups, setGroups] = useState<AccountGroup[]>(initialGroups);
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState('');
