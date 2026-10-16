@@ -1,13 +1,17 @@
-import { createClient } from "npm:@supabase/supabase-js@2.57.4";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-};
+// Proxy hacia Google Places (New) para buscar pupuserías.
+// La API key vive solo aquí. Como la función es pública (verify_jwt = false),
+// se protege con: lista de orígenes permitidos, rate limit por IP, caché de
+// respuestas, validación de entrada y un field mask mínimo (menos costo por request).
+//
+// Variables de entorno:
+//   GOOGLE_PLACES_API_KEY  (obligatoria)
+//   ALLOWED_ORIGINS        (opcional) lista separada por comas, ej:
+//                          "https://pupusastime.com,http://localhost:5173"
+//                          Si no se define, se acepta cualquier origen.
 
 interface PlaceResult {
   id: string;
+  placeId: string;
   name: string;
   address: string;
   locality?: string;
@@ -17,339 +21,211 @@ interface PlaceResult {
   openNow?: boolean;
   hours?: string;
   location?: { lat: number; lng: number };
-  placeId: string;
-  photoUrl?: string;
 }
 
-function haversineKm(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number
-): number {
+interface GooglePlace {
+  id?: string;
+  displayName?: { text?: string };
+  formattedAddress?: string;
+  rating?: number;
+  userRatingCount?: number;
+  location?: { latitude: number; longitude: number };
+  currentOpeningHours?: { openNow?: boolean; weekdayDescriptions?: string[] };
+  addressComponents?: Array<{ shortText?: string; types?: string[] }>;
+}
+
+const SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
+const NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby";
+
+// Solo los campos que la app realmente muestra. Cada campo extra puede subir el SKU de precio.
+const FIELD_MASK = [
+  "places.id",
+  "places.displayName",
+  "places.formattedAddress",
+  "places.rating",
+  "places.userRatingCount",
+  "places.location",
+  "places.currentOpeningHours",
+  "places.addressComponents",
+].join(",");
+
+const RATE_LIMIT_PER_MINUTE = 30;
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_QUERY_LENGTH = 80;
+
+const allowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+// Estado en memoria por instancia: best-effort, pero corta abusos simples.
+const hits = new Map<string, { count: number; windowStart: number }>();
+const cache = new Map<string, { at: number; body: string }>();
+
+function corsHeaders(origin: string | null): Record<string, string> {
+  const allowOrigin = allowedOrigins.length === 0 ? "*" : origin ?? "";
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+    Vary: "Origin",
+  };
+}
+
+function json(status: number, data: unknown, origin: string | null, extra: Record<string, string> = {}) {
+  return new Response(typeof data === "string" ? data : JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders(origin), "Content-Type": "application/json", ...extra },
+  });
+}
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = hits.get(ip);
+  if (!entry || now - entry.windowStart > 60_000) {
+    hits.set(ip, { count: 1, windowStart: now });
+    return false;
+  }
+  entry.count++;
+  return entry.count > RATE_LIMIT_PER_MINUTE;
+}
+
+function pruneMaps() {
+  const now = Date.now();
+  for (const [k, v] of cache) if (now - v.at > CACHE_TTL_MS) cache.delete(k);
+  for (const [k, v] of hits) if (now - v.windowStart > 60_000) hits.delete(k);
+}
+
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function formatDistance(km: number): string {
-  if (km < 1) return `${Math.round(km * 1000)} m`;
-  return `${km.toFixed(1)} km`;
+function toResult(p: GooglePlace, origin?: { lat: number; lng: number }): PlaceResult {
+  const locality = p.addressComponents?.find(
+    (c) => c.types?.includes("locality") || c.types?.includes("administrative_area_level_1"),
+  )?.shortText;
+  const loc = p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined;
+  return {
+    id: p.id ?? "",
+    placeId: p.id ?? "",
+    name: p.displayName?.text ?? "",
+    address: p.formattedAddress ?? "",
+    locality,
+    rating: p.rating,
+    reviewCount: p.userRatingCount,
+    distanceKm: loc && origin ? haversineKm(origin.lat, origin.lng, loc.lat, loc.lng) : undefined,
+    openNow: p.currentOpeningHours?.openNow,
+    hours: p.currentOpeningHours?.weekdayDescriptions?.join(", "),
+    location: loc,
+  };
+}
+
+const looksLikePupuseria = (name: string) => {
+  const n = name.toLowerCase();
+  return n.includes("pupus") || n.includes("comedor") || n.includes("comida");
+};
+
+function parseCoord(v: unknown, min: number, max: number): number | undefined {
+  const n = typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
+  const origin = req.headers.get("Origin");
+
+  if (allowedOrigins.length > 0 && (!origin || !allowedOrigins.includes(origin))) {
+    return json(403, { error: "Origen no permitido" }, null);
+  }
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+  if (req.method !== "POST") return json(405, { error: "Método no permitido" }, origin);
+
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
+  if (isRateLimited(ip)) {
+    return json(429, { error: "Demasiadas búsquedas, esperá un momento" }, origin, { "Retry-After": "60" });
   }
 
+  const apiKey = Deno.env.get("GOOGLE_PLACES_API_KEY");
+  if (!apiKey) return json(503, { error: "Búsqueda no configurada", needsConfig: true }, origin);
+
   try {
-    const url = new URL(req.url);
-    const action = url.searchParams.get("action") || "nearby";
+    const action = new URL(req.url).searchParams.get("action") ?? "nearby";
+    const raw = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
-    const GOOGLE_API_KEY = Deno.env.get("GOOGLE_PLACES_API_KEY");
+    const lat = parseCoord(raw.lat, -90, 90);
+    const lng = parseCoord(raw.lng, -180, 180);
+    const coords = lat !== undefined && lng !== undefined ? { lat, lng } : undefined;
+    const radiusNum = typeof raw.radius === "number" ? raw.radius : 5000;
+    const radius = Math.min(Math.max(radiusNum, 100), 50000); // máximo que acepta Places
+    const query = typeof raw.query === "string" ? raw.query.trim().slice(0, MAX_QUERY_LENGTH) : "";
 
-    if (!GOOGLE_API_KEY) {
-      return new Response(
-        JSON.stringify({
-          error: "Google Places API key not configured",
-          needsConfig: true,
-        }),
-        {
-          status: 503,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
+    let url: string;
+    let googleBody: Record<string, unknown>;
 
-    // Parse request body or query params
-    let body: {
-      lat?: number;
-      lng?: number;
-      query?: string;
-      radius?: number;
-    } = {};
-
-    if (req.method === "POST") {
-      try {
-        body = await req.json();
-      } catch {
-        body = {};
-      }
-    } else {
-      body = {
-        lat: url.searchParams.get("lat")
-          ? parseFloat(url.searchParams.get("lat")!)
-          : undefined,
-        lng: url.searchParams.get("lng")
-          ? parseFloat(url.searchParams.get("lng")!)
-          : undefined,
-        query: url.searchParams.get("query") || undefined,
-        radius: url.searchParams.get("radius")
-          ? parseInt(url.searchParams.get("radius")!)
-          : undefined,
-      };
-    }
-
-    const radius = body.radius || 5000;
-
-    // Google Places API (New) — v1
-    const placesApiBase = "https://places.googleapis.com/v1/places:searchText";
-    const placesNearbyBase =
-      "https://places.googleapis.com/v1/places:searchNearby";
-
-    const fieldMask =
-      "places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.googleMapsUri,places.location,places.currentOpeningHours,places.photos,places.shortFormattedAddress,places.addressComponents";
-
-    let results: PlaceResult[] = [];
-
-    if (action === "search" && body.query) {
-      // Text Search
-      const searchText = body.query.includes("pupus") ||
-        body.query.includes("pupuser")
-        ? body.query
-        : `pupusería ${body.query}`;
-
-      const searchBody: Record<string, unknown> = {
-        textQuery: searchText,
+    if (action === "search" && query) {
+      googleBody = {
+        textQuery: query.toLowerCase().includes("pupus") ? query : `pupusería ${query}`,
         languageCode: "es",
         regionCode: "SV",
         pageSize: 20,
+        ...(coords && {
+          locationBias: { circle: { center: { latitude: coords.lat, longitude: coords.lng }, radius } },
+        }),
       };
-
-      if (body.lat !== undefined && body.lng !== undefined) {
-        searchBody.locationBias = {
-          circle: {
-            center: { latitude: body.lat, longitude: body.lng },
-            radius: radius,
-          },
-        };
-      }
-
-      const response = await fetch(placesApiBase, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Goog-Api-Key": GOOGLE_API_KEY,
-          "X-Goog-FieldMask": fieldMask,
-        },
-        body: JSON.stringify(searchBody),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error("Google Places Text Search error:", errText);
-        return new Response(
-          JSON.stringify({
-            error: "Google Places API request failed",
-            details: errText,
-          }),
-          {
-            status: 502,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
-      }
-
-      const data = await response.json();
-      const places = data.places || [];
-
-      results = places.map((p: Record<string, unknown>) => {
-        const location = p.location as
-          | { latitude: number; longitude: number }
-          | undefined;
-        const openingHours = p.currentOpeningHours as
-          | { openNow: boolean; weekdayDescriptions?: string[] }
-          | undefined;
-        const addressComponents = p.addressComponents as
-          | Array<{ shortText?: string; types?: string[] }>
-          | undefined;
-
-        let locality: string | undefined;
-        if (addressComponents) {
-          for (const comp of addressComponents) {
-            if (comp.types?.includes("locality") || comp.types?.includes("administrative_area_level_1")) {
-              locality = comp.shortText;
-              break;
-            }
-          }
-        }
-
-        let distanceKm: number | undefined;
-        if (
-          location &&
-          body.lat !== undefined &&
-          body.lng !== undefined
-        ) {
-          distanceKm = haversineKm(
-            body.lat,
-            body.lng,
-            location.latitude,
-            location.longitude
-          );
-        }
-
-        return {
-          id: p.id as string,
-          placeId: p.id as string,
-          name: (p.displayName as { text: string })?.text || "",
-          address: (p.formattedAddress as string) || "",
-          locality,
-          rating: p.rating as number | undefined,
-          reviewCount: p.userRatingCount as number | undefined,
-          distanceKm,
-          openNow: openingHours?.openNow,
-          hours: openingHours?.weekdayDescriptions?.join(", "),
-          location: location
-            ? { lat: location.latitude, lng: location.longitude }
-            : undefined,
-        };
-      });
-    } else if (action === "nearby" && body.lat !== undefined && body.lng !== undefined) {
-      // Nearby Search
-      const nearbyBody = {
+      url = SEARCH_URL;
+    } else if (action === "nearby" && coords) {
+      googleBody = {
         includedTypes: ["restaurant"],
         maxResultCount: 20,
-        locationRestriction: {
-          circle: {
-            center: { latitude: body.lat, longitude: body.lng },
-            radius: radius,
-          },
-        },
+        locationRestriction: { circle: { center: { latitude: coords.lat, longitude: coords.lng }, radius } },
         languageCode: "es",
         regionCode: "SV",
       };
-
-      const response = await fetch(placesNearbyBase, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Goog-Api-Key": GOOGLE_API_KEY,
-          "X-Goog-FieldMask": fieldMask,
-        },
-        body: JSON.stringify(nearbyBody),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error("Google Places Nearby Search error:", errText);
-        return new Response(
-          JSON.stringify({
-            error: "Google Places API request failed",
-            details: errText,
-          }),
-          {
-            status: 502,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
-      }
-
-      const data = await response.json();
-      const places = data.places || [];
-
-      results = places
-        .filter((p: Record<string, unknown>) => {
-          const name = ((p.displayName as { text: string })?.text || "").toLowerCase();
-          return (
-            name.includes("pupus") ||
-            name.includes("pupuser") ||
-            name.includes("comedor") ||
-            name.includes("comida")
-          );
-        })
-        .map((p: Record<string, unknown>) => {
-          const location = p.location as
-            | { latitude: number; longitude: number }
-            | undefined;
-          const openingHours = p.currentOpeningHours as
-            | { openNow: boolean; weekdayDescriptions?: string[] }
-            | undefined;
-          const addressComponents = p.addressComponents as
-            | Array<{ shortText?: string; types?: string[] }>
-            | undefined;
-
-          let locality: string | undefined;
-          if (addressComponents) {
-            for (const comp of addressComponents) {
-              if (
-                comp.types?.includes("locality") ||
-                comp.types?.includes("administrative_area_level_1")
-              ) {
-                locality = comp.shortText;
-                break;
-              }
-            }
-          }
-
-          let distanceKm: number | undefined;
-          if (location) {
-            distanceKm = haversineKm(
-              body.lat!,
-              body.lng!,
-              location.latitude,
-              location.longitude
-            );
-          }
-
-          return {
-            id: p.id as string,
-            placeId: p.id as string,
-            name: (p.displayName as { text: string })?.text || "",
-            address: (p.formattedAddress as string) || "",
-            locality,
-            rating: p.rating as number | undefined,
-            reviewCount: p.userRatingCount as number | undefined,
-            distanceKm,
-            openNow: openingHours?.openNow,
-            hours: openingHours?.weekdayDescriptions?.join(", "),
-            location: location
-              ? { lat: location.latitude, lng: location.longitude }
-              : undefined,
-          };
-        });
+      url = NEARBY_URL;
     } else {
-      return new Response(
-        JSON.stringify({
-          error: "Invalid action or missing parameters",
-        }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+      return json(400, { error: "Acción inválida o faltan parámetros" }, origin);
     }
 
-    // Sort by distance when available
-    results.sort((a, b) => {
-      if (a.distanceKm !== undefined && b.distanceKm !== undefined) {
-        return a.distanceKm - b.distanceKm;
-      }
-      return 0;
+    // ~100 m de precisión en la llave de caché: misma mesa, misma respuesta.
+    const cacheKey = [
+      action,
+      query.toLowerCase(),
+      coords ? `${coords.lat.toFixed(3)},${coords.lng.toFixed(3)}` : "",
+      radius,
+    ].join("|");
+    pruneMaps();
+    const cached = cache.get(cacheKey);
+    if (cached) return json(200, cached.body, origin, { "X-Cache": "HIT" });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": FIELD_MASK },
+      body: JSON.stringify(googleBody),
     });
 
-    return new Response(
-      JSON.stringify({
-        results,
-        count: results.length,
-      }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+    if (!response.ok) {
+      console.error(`Google Places ${action} error ${response.status}:`, await response.text());
+      return json(502, { error: "No pudimos buscar pupuserías ahora mismo" }, origin);
+    }
+
+    const data = (await response.json()) as { places?: GooglePlace[] };
+    let places = data.places ?? [];
+    if (action === "nearby") places = places.filter((p) => looksLikePupuseria(p.displayName?.text ?? ""));
+
+    const results = places.map((p) => toResult(p, coords));
+    results.sort((a, b) =>
+      a.distanceKm !== undefined && b.distanceKm !== undefined ? a.distanceKm - b.distanceKm : 0
     );
+
+    const body = JSON.stringify({ results, count: results.length });
+    cache.set(cacheKey, { at: Date.now(), body });
+    return json(200, body, origin, { "X-Cache": "MISS" });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return new Response(
-      JSON.stringify({ error: message }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
+    console.error("places-search error:", err);
+    return json(500, { error: "Error inesperado" }, origin);
   }
 });

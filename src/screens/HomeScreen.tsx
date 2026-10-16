@@ -32,7 +32,7 @@ export function HomeScreen({ onStart, theme, onToggleTheme }: Props) {
         <div className="flex flex-col items-center text-center max-w-sm animate-slideUp">
           <div className="mb-6">
             <img
-              src="/ChatGPT_Image_Aug_29,_2026,_06_11_01_PM.png"
+              src="/logo.png"
               alt="Pupusas Time"
               className="w-52 h-52 object-contain"
             />

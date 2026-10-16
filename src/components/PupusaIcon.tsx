@@ -21,7 +21,6 @@ const COLORS: Record<PupusaTypeId, string> = {
   qespinaca: '#6E8239',
   fqloroco: '#C96A3D',
   chicharronloroco: '#B0542B',
-  qayote: '#D49540',
   fqchip: '#8AA24F',
   camaron: '#DC8A60',
   frijolchorizo: '#8E4020',

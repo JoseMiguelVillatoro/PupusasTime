@@ -57,6 +57,43 @@ export function consolidateOrders(orders: PersonOrder[]): ConsolidatedOrder {
   };
 }
 
+/**
+ * Las personas se identifican por posición (`p0`, `p1`, …). Antes también se
+ * buscaba por nombre, lo que rompía si alguien se llamaba literalmente "p1".
+ */
+export function personIdFor(index: number): string {
+  return `p${index}`;
+}
+
+export function resolvePersonIndex(personId: string): number {
+  const m = /^p(\d+)$/.exec(personId);
+  return m ? Number(m[1]) : -1;
+}
+
+export function groupOrders(g: AccountGroup, orders: PersonOrder[]): PersonOrder[] {
+  return g.personIds
+    .map((pid) => orders[resolvePersonIndex(pid)])
+    .filter((o): o is PersonOrder => Boolean(o));
+}
+
+export function groupPersonNames(g: AccountGroup, peopleNames: string[]): string[] {
+  return g.personIds
+    .map(resolvePersonIndex)
+    .filter((idx) => idx >= 0 && idx < peopleNames.length)
+    .map((idx) => peopleNames[idx] || `Persona ${idx + 1}`);
+}
+
+/** Quita de los grupos a personas que ya no existen (p. ej. si bajaron el número de personas). */
+export function pruneGroups(groups: AccountGroup[], peopleCount: number): AccountGroup[] {
+  return groups.map((g) => ({
+    ...g,
+    personIds: g.personIds.filter((pid) => {
+      const idx = resolvePersonIndex(pid);
+      return idx >= 0 && idx < peopleCount;
+    }),
+  }));
+}
+
 export function personTotal(order: PersonOrder): number {
   return order.items.reduce((sum, i) => sum + (i.quantity > 0 ? i.quantity : 0), 0);
 }
@@ -98,21 +135,8 @@ export function generateOrderText(
     lines.push('═════════════════');
     lines.push('CUENTAS');
     for (const g of groups) {
-      const gOrders: PersonOrder[] = [];
-      for (const pid of g.personIds) {
-        const idx = peopleNames && peopleNames.indexOf(pid) >= 0
-          ? peopleNames.indexOf(pid)
-          : parseInt(pid.slice(1));
-        const o = people[idx];
-        if (o) gOrders.push(o);
-      }
-      const gc = consolidateOrders(gOrders);
-      const names = g.personIds.map((pid) => {
-        const idx = peopleNames && peopleNames.indexOf(pid) >= 0
-          ? peopleNames.indexOf(pid)
-          : parseInt(pid.slice(1));
-        return (peopleNames && peopleNames[idx]) || `Persona ${idx + 1}`;
-      });
+      const gc = consolidateOrders(groupOrders(g, people));
+      const names = groupPersonNames(g, peopleNames ?? people.map((p) => p.name));
 
       lines.push('');
       lines.push(`CUENTA: ${g.name}`);
@@ -141,6 +165,13 @@ export function generateOrderText(
 
 export { MASA_LABEL, MASA_EMOJI };
 
+/** Montos en centavos enteros: nunca hacemos aritmética de dinero en float. */
+export type Cents = number;
+
+export function toCents(dollars: number): Cents {
+  return Math.round(dollars * 100);
+}
+
 export interface AccountBreakdown {
   groupId: string;
   groupName: string;
@@ -148,18 +179,48 @@ export interface AccountBreakdown {
   totalPupusas: number;
   maiz: ConsolidatedEntry[];
   arroz: ConsolidatedEntry[];
-  subtotal: number;
-  tip: number;
-  total: number;
+  subtotal: Cents;
+  tip: Cents;
+  total: Cents;
 }
 
 export interface PaymentResult {
   accounts: AccountBreakdown[];
-  generalSubtotal: number;
-  generalTip: number;
-  generalTotal: number;
-  priceByType: Record<string, number>;
+  generalSubtotal: Cents;
+  generalTip: Cents;
+  generalTotal: Cents;
+  priceCentsByType: Record<string, Cents>;
   tipPercent: number;
+}
+
+export function lineCents(e: ConsolidatedEntry, priceCentsByType: Record<string, Cents>): Cents {
+  return e.quantity * (priceCentsByType[e.pupusaTypeId] || 0);
+}
+
+export function entriesCents(entries: ConsolidatedEntry[], priceCentsByType: Record<string, Cents>): Cents {
+  return entries.reduce((s, e) => s + lineCents(e, priceCentsByType), 0);
+}
+
+/**
+ * Reparte `total` centavos entre cuentas en proporción a `weights`, usando el
+ * método del mayor residuo: la suma siempre cuadra exacto y nadie absorbe más
+ * de 1¢ de diferencia por redondeo.
+ */
+export function distributeProportionally(total: Cents, weights: Cents[]): Cents[] {
+  const weightSum = weights.reduce((s, w) => s + w, 0);
+  if (total <= 0 || weightSum <= 0) return weights.map(() => 0);
+
+  const exact = weights.map((w) => (w * total) / weightSum);
+  const shares = exact.map(Math.floor);
+  let leftover = total - shares.reduce((s, x) => s + x, 0);
+
+  const byRemainder = exact
+    .map((x, i) => ({ i, r: x - Math.floor(x) }))
+    .sort((a, b) => b.r - a.r || a.i - b.i);
+  for (let k = 0; leftover > 0; k++, leftover--) {
+    shares[byRemainder[k % byRemainder.length].i] += 1;
+  }
+  return shares;
 }
 
 export function calculatePayment(
@@ -169,24 +230,18 @@ export function calculatePayment(
   priceByType: Record<string, number>,
   tipPercent: number
 ): PaymentResult {
-  const lineCost = (e: ConsolidatedEntry) => e.quantity * (priceByType[e.pupusaTypeId] || 0);
+  const priceCentsByType: Record<string, Cents> = {};
+  for (const [id, dollars] of Object.entries(priceByType)) {
+    priceCentsByType[id] = toCents(dollars);
+  }
+
   const accounts: AccountBreakdown[] = groups.map((g) => {
-    const gOrders: PersonOrder[] = [];
-    for (const pid of g.personIds) {
-      const idx = peopleNames.indexOf(pid) >= 0 ? peopleNames.indexOf(pid) : parseInt(pid.slice(1));
-      const o = orders[idx];
-      if (o) gOrders.push(o);
-    }
-    const gc = consolidateOrders(gOrders);
-    const subtotal = [...gc.maiz, ...gc.arroz].reduce((s, e) => s + lineCost(e), 0);
-    const names = g.personIds.map((pid) => {
-      const idx = peopleNames.indexOf(pid) >= 0 ? peopleNames.indexOf(pid) : parseInt(pid.slice(1));
-      return peopleNames[idx] || `Persona ${idx + 1}`;
-    });
+    const gc = consolidateOrders(groupOrders(g, orders));
+    const subtotal = entriesCents([...gc.maiz, ...gc.arroz], priceCentsByType);
     return {
       groupId: g.id,
       groupName: g.name,
-      personNames: names,
+      personNames: groupPersonNames(g, peopleNames),
       totalPupusas: gc.total,
       maiz: gc.maiz,
       arroz: gc.arroz,
@@ -197,30 +252,28 @@ export function calculatePayment(
   });
 
   const generalSubtotal = accounts.reduce((s, a) => s + a.subtotal, 0);
-  const generalTip = Math.round(generalSubtotal * tipPercent) / 100;
+  const safeTipPercent = Number.isFinite(tipPercent) && tipPercent > 0 ? tipPercent : 0;
+  const generalTip = Math.round((generalSubtotal * safeTipPercent) / 100);
 
-  // Distribute tip proportionally, rounding to cents
-  let tipRemaining = generalTip;
+  const tips = distributeProportionally(generalTip, accounts.map((a) => a.subtotal));
   accounts.forEach((a, i) => {
-    if (i === accounts.length - 1) {
-      a.tip = tipRemaining;
-    } else {
-      const t = generalSubtotal > 0
-        ? Math.round((a.subtotal / generalSubtotal) * generalTip)
-        : 0;
-      a.tip = t;
-      tipRemaining -= t;
-    }
+    a.tip = tips[i];
     a.total = a.subtotal + a.tip;
   });
 
-  const generalTotal = generalSubtotal + generalTip;
-
-  return { accounts, generalSubtotal, generalTip, generalTotal, priceByType, tipPercent };
+  return {
+    accounts,
+    generalSubtotal,
+    generalTip,
+    generalTotal: generalSubtotal + generalTip,
+    priceCentsByType,
+    tipPercent: safeTipPercent,
+  };
 }
 
-export function formatCurrency(amount: number): string {
-  return '$' + amount.toFixed(2);
+export function formatCurrency(cents: Cents): string {
+  const sign = cents < 0 ? '-' : '';
+  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 
 export function generatePaymentText(
@@ -241,21 +294,21 @@ export function generatePaymentText(
 
     if (a.maiz.length > 0) {
       const maizTotal = a.maiz.reduce((s, e) => s + e.quantity, 0);
-      const maizCost = a.maiz.reduce((s, e) => s + e.quantity * (payment.priceByType[e.pupusaTypeId] || 0), 0);
+      const maizCost = entriesCents(a.maiz, payment.priceCentsByType);
       lines.push('');
       lines.push(`🌽 Maíz · ${maizTotal}`);
       for (const e of a.maiz) {
-        lines.push(`${e.code} × ${e.quantity} = ${formatCurrency(e.quantity * (payment.priceByType[e.pupusaTypeId] || 0))}`);
+        lines.push(`${e.code} × ${e.quantity} = ${formatCurrency(lineCents(e, payment.priceCentsByType))}`);
       }
       lines.push(`Total Maíz: ${formatCurrency(maizCost)}`);
     }
     if (a.arroz.length > 0) {
       const arrozTotal = a.arroz.reduce((s, e) => s + e.quantity, 0);
-      const arrozCost = a.arroz.reduce((s, e) => s + e.quantity * (payment.priceByType[e.pupusaTypeId] || 0), 0);
+      const arrozCost = entriesCents(a.arroz, payment.priceCentsByType);
       lines.push('');
       lines.push(`🍚 Arroz · ${arrozTotal}`);
       for (const e of a.arroz) {
-        lines.push(`${e.code} × ${e.quantity} = ${formatCurrency(e.quantity * (payment.priceByType[e.pupusaTypeId] || 0))}`);
+        lines.push(`${e.code} × ${e.quantity} = ${formatCurrency(lineCents(e, payment.priceCentsByType))}`);
       }
       lines.push(`Total Arroz: ${formatCurrency(arrozCost)}`);
     }

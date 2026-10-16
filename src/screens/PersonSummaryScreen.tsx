@@ -3,7 +3,7 @@ import { TopBar } from '@/components/TopBar';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { ProgressBar, LiveTotal } from '@/components/Progress';
 import { PupusaIcon } from '@/components/PupusaIcon';
-import { PupusaItem, PersonOrder, MASA_LABEL, MASA_EMOJI, PUPUSA_BY_ID } from '@/data/pupusa';
+import { PersonOrder, MASA_LABEL, MASA_EMOJI, PUPUSA_BY_ID } from '@/data/pupusa';
 import { personTotal, consolidateOrders } from '@/data/consolidation';
 import { Theme } from '@/hooks/useTheme';
 

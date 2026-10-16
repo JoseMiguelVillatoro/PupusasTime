@@ -7,7 +7,6 @@ import {
   Clock,
   X,
   Navigation,
-  ChevronLeft,
   Loader2,
   AlertCircle,
   ExternalLink,

@@ -17,6 +17,9 @@ import {
   generatePaymentText,
   calculatePayment,
   formatCurrency,
+  lineCents,
+  entriesCents,
+  personIdFor,
   PaymentResult,
 } from '@/data/consolidation';
 import { Theme } from '@/hooks/useTheme';
@@ -65,9 +68,9 @@ export function PaymentScreen({
   const [copied, setCopied] = useState(false);
   const consolidated = consolidateOrders(orders);
   const paymentGroups = billing === 'single'
-    ? [{ id: 'single-account', name: 'Cuenta única', personIds: people.map((_, index) => `p${index}`) }]
+    ? [{ id: 'single-account', name: 'Cuenta única', personIds: people.map((_, index) => personIdFor(index)) }]
     : billing === 'split'
-      ? people.map((name, index) => ({ id: `person-account-${index}`, name: name || `Persona ${index + 1}`, personIds: [`p${index}`] }))
+      ? people.map((name, index) => ({ id: `person-account-${index}`, name: name || `Persona ${index + 1}`, personIds: [personIdFor(index)] }))
       : groups;
 
   const orderedTypes = Array.from(
@@ -275,12 +278,12 @@ export function PaymentScreen({
                       {a.maiz.map((e) => (
                         <div key={e.pupusaTypeId} className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
                           <span>{e.code} × {e.quantity}</span>
-                          <span className="font-bold tabular-nums">{formatCurrency(e.quantity * (paymentResult.priceByType[e.pupusaTypeId] || 0))}</span>
+                          <span className="font-bold tabular-nums">{formatCurrency(lineCents(e, paymentResult.priceCentsByType))}</span>
                         </div>
                       ))}
                       <div className="flex items-center justify-between text-sm font-bold text-charcoal-800 dark:text-cream-100 pt-1">
                         <span>Total Maíz</span>
-                        <span className="tabular-nums">{formatCurrency(a.maiz.reduce((s, e) => s + e.quantity * (paymentResult.priceByType[e.pupusaTypeId] || 0), 0))}</span>
+                        <span className="tabular-nums">{formatCurrency(entriesCents(a.maiz, paymentResult.priceCentsByType))}</span>
                       </div>
                     </div>
                   </div>
@@ -294,12 +297,12 @@ export function PaymentScreen({
                       {a.arroz.map((e) => (
                         <div key={e.pupusaTypeId} className="flex items-center justify-between text-sm text-charcoal-700 dark:text-cream-200">
                           <span>{e.code} × {e.quantity}</span>
-                          <span className="font-bold tabular-nums">{formatCurrency(e.quantity * (paymentResult.priceByType[e.pupusaTypeId] || 0))}</span>
+                          <span className="font-bold tabular-nums">{formatCurrency(lineCents(e, paymentResult.priceCentsByType))}</span>
                         </div>
                       ))}
                       <div className="flex items-center justify-between text-sm font-bold text-charcoal-800 dark:text-cream-100 pt-1">
                         <span>Total Arroz</span>
-                        <span className="tabular-nums">{formatCurrency(a.arroz.reduce((s, e) => s + e.quantity * (paymentResult.priceByType[e.pupusaTypeId] || 0), 0))}</span>
+                        <span className="tabular-nums">{formatCurrency(entriesCents(a.arroz, paymentResult.priceCentsByType))}</span>
                       </div>
                     </div>
                   </div>

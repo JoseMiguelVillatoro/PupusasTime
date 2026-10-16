@@ -19,6 +19,8 @@ import {
   personTotal,
   ConsolidatedEntry,
   ConsolidatedOrder,
+  groupOrders,
+  resolvePersonIndex,
 } from '@/data/consolidation';
 import { Theme } from '@/hooks/useTheme';
 
@@ -52,16 +54,8 @@ export function FinalSummaryScreen({
   const consolidated = consolidateOrders(orders);
   const orderText = generateOrderText(restaurant?.name || null, consolidated, orders, groups, people);
 
-  const groupOrders = (g: AccountGroup): PersonOrder[] =>
-    g.personIds
-      .map((pid) => {
-        const idx = people.indexOf(pid) >= 0 ? people.indexOf(pid) : parseInt(pid.slice(1));
-        return orders[idx];
-      })
-      .filter((o): o is PersonOrder => Boolean(o));
-
   const groupConsolidated = (g: AccountGroup): ConsolidatedOrder =>
-    consolidateOrders(groupOrders(g));
+    consolidateOrders(groupOrders(g, orders));
 
   const toggleExpand = (id: string) => {
     setExpanded((prev) => {
@@ -258,7 +252,7 @@ export function FinalSummaryScreen({
                     </div>
                     <div className="flex flex-wrap gap-1.5 mb-3">
                       {g.personIds.map((pid) => {
-                        const idx = people.indexOf(pid) >= 0 ? people.indexOf(pid) : parseInt(pid.slice(1));
+                        const idx = resolvePersonIndex(pid);
                         const name = people[idx] || `Persona ${idx + 1}`;
                         return (
                           <span
