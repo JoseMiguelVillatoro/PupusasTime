@@ -20,7 +20,7 @@ export function Button({
   const base =
     'w-full rounded-2xl font-bold transition-all active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100 no-tap-highlight';
   const variants = {
-    primary: 'bg-terracotta-400 text-white shadow-pop hover:bg-terracotta-500 py-4 text-lg',
+    primary: 'bg-terracotta-500 text-white shadow-pop hover:bg-terracotta-600 py-4 text-lg',
     secondary:
       'bg-cream-200 text-charcoal-800 dark:bg-night-100 dark:text-cream-100 hover:bg-cream-300 dark:hover:bg-night-50 py-4 text-lg',
     ghost:

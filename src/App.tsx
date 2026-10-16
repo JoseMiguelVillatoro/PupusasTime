@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useEffect } from 'react';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { RestaurantScreen } from '@/screens/RestaurantScreen';
 import { PeopleScreen } from '@/screens/PeopleScreen';
@@ -7,251 +7,124 @@ import { OrderScreen } from '@/screens/OrderScreen';
 import { PersonSummaryScreen } from '@/screens/PersonSummaryScreen';
 import { FinalSummaryScreen } from '@/screens/FinalSummaryScreen';
 import { PaymentScreen } from '@/screens/PaymentScreen';
-import { PaymentResult, pruneGroups } from '@/data/consolidation';
-import {
-  PlaceRestaurant,
-  BillingMethod,
-  PersonOrder,
-  PupusaItem,
-  AccountGroup,
-} from '@/data/pupusa';
 import { useTheme } from '@/hooks/useTheme';
-
-type Screen =
-  | 'home'
-  | 'restaurant'
-  | 'people'
-  | 'billing'
-  | 'order'
-  | 'personSummary'
-  | 'final'
-  | 'payment';
-
-let idCounter = 0;
-const genId = () => `id-${++idCounter}-${Date.now()}`;
+import { usePupuseada } from '@/state/usePupuseada';
+import { hasOrders } from '@/state/pupuseada';
+import { archive } from '@/state/storage';
 
 export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
-  const [screen, setScreen] = useState<Screen>('home');
-  const [restaurant, setRestaurant] = useState<PlaceRestaurant | null>(null);
-  const [people, setPeople] = useState<string[]>([]);
-  const [billing, setBilling] = useState<BillingMethod | null>(null);
-  const [groups, setGroups] = useState<AccountGroup[]>([]);
-  const [orders, setOrders] = useState<PersonOrder[]>([]);
-  const [currentPersonIdx, setCurrentPersonIdx] = useState(0);
-  const [editingFromSummary, setEditingFromSummary] = useState(false);
+  const { state, dispatch, finish } = usePupuseada();
+  const themeProps = { theme, onToggleTheme: toggleTheme };
 
-  // Payment calculator state (lifted so it persists across navigation)
-  const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
-  const [paymentStep, setPaymentStep] = useState<'intro' | 'price' | 'tip' | 'result'>('intro');
-  const [hasTip, setHasTip] = useState<boolean | null>(null);
-  const [tipInput, setTipInput] = useState('');
-  const [paymentResult, setPaymentResult] = useState<PaymentResult | null>(null);
+  const people = state.people;
+  const currentIdx = people.findIndex((p) => p.id === state.currentPersonId);
+  const current = currentIdx >= 0 ? people[currentIdx] : null;
 
-  const reset = useCallback(() => {
-    setRestaurant(null);
-    setPeople([]);
-    setBilling(null);
-    setGroups([]);
-    setOrders([]);
-    setCurrentPersonIdx(0);
-    setEditingFromSummary(false);
-    setPriceInputs({});
-    setPaymentStep('intro');
-    setHasTip(null);
-    setTipInput('');
-    setPaymentResult(null);
-    setScreen('home');
-  }, []);
+  // Un estado guardado inconsistente (p. ej. de una versión anterior) no deja la pantalla en blanco.
+  const orphanScreen = (state.screen === 'order' || state.screen === 'personSummary') && !current;
+  useEffect(() => {
+    if (orphanScreen) dispatch({ type: 'GO', screen: people.length > 0 ? 'final' : 'home' });
+  }, [orphanScreen, people.length, dispatch]);
 
-  const startPupuseada = () => {
-    setRestaurant(null);
-    setPeople([]);
-    setBilling(null);
-    setGroups([]);
-    setOrders([]);
-    setCurrentPersonIdx(0);
-    setPriceInputs({});
-    setPaymentStep('intro');
-    setHasTip(null);
-    setTipInput('');
-    setPaymentResult(null);
-    setScreen('restaurant');
-  };
-
-  const handleRestaurantContinue = () => {
-    if (restaurant) setScreen('people');
-  };
-
-  const handlePeopleContinue = (names: string[]) => {
-    setPeople(names);
-    // Conserva lo ya pedido por cada posición y descarta a quien se quitó.
-    setOrders((prev) =>
-      names.map((name, i) => ({ id: prev[i]?.id ?? genId(), name, items: prev[i]?.items ?? [] }))
-    );
-    setGroups((prev) => pruneGroups(prev, names.length));
-    setPaymentResult(null);
-    setPaymentStep('intro');
-    setCurrentPersonIdx(0);
-    setScreen('billing');
-  };
-
-  const handleBillingContinue = (method: BillingMethod, newGroups: AccountGroup[]) => {
-    setBilling(method);
-    if (method === 'groups') {
-      setGroups(newGroups);
-    } else {
-      setGroups([]);
-    }
-    setCurrentPersonIdx(0);
-    setScreen('order');
-  };
-
-  const handleOrderComplete = (items: PupusaItem[]) => {
-    setOrders((prev) =>
-      prev.map((order, i) =>
-        i === currentPersonIdx ? { ...order, items } : order
-      )
-    );
-    setScreen('personSummary');
-  };
-
-  const handlePersonSummaryContinue = () => {
-    if (currentPersonIdx + 1 >= people.length) {
-      setScreen('final');
-    } else {
-      setCurrentPersonIdx((i) => i + 1);
-      setScreen('order');
-    }
-  };
-
-  const handleEditCurrent = () => {
-    setEditingFromSummary(true);
-    setScreen('order');
-  };
-
-  const handleOrderBack = () => {
-    if (editingFromSummary) {
-      setEditingFromSummary(false);
-      setScreen('personSummary');
-    } else if (currentPersonIdx === 0) {
-      setScreen('billing');
-    } else {
-      setCurrentPersonIdx((i) => i - 1);
-      setScreen('personSummary');
-    }
-  };
-
-  const handleFinalEdit = () => {
-    setCurrentPersonIdx(0);
-    setScreen('personSummary');
+  const start = () => {
+    if (hasOrders(state)) archive(state);
+    dispatch({ type: 'START' });
   };
 
   return (
     <div className="min-h-screen bg-cream-100 dark:bg-night-400">
       <div className="max-w-md mx-auto min-h-screen bg-cream-100 dark:bg-night-400 relative">
-        {screen === 'home' && (
-          <HomeScreen onStart={startPupuseada} theme={theme} onToggleTheme={toggleTheme} />
-        )}
+        {state.screen === 'home' && <HomeScreen onStart={start} {...themeProps} />}
 
-        {screen === 'restaurant' && (
+        {state.screen === 'restaurant' && (
           <RestaurantScreen
-            onSelect={setRestaurant}
-            selected={restaurant}
-            theme={theme}
-            onToggleTheme={toggleTheme}
-            onContinue={handleRestaurantContinue}
+            selected={state.restaurant}
+            onSelect={(restaurant) => dispatch({ type: 'SET_RESTAURANT', restaurant })}
+            onContinue={() => dispatch({ type: 'RESTAURANT_DONE' })}
+            onBack={state.returnToFinal ? () => dispatch({ type: 'RESTAURANT_DONE' }) : () => dispatch({ type: 'GO', screen: 'home' })}
+            {...themeProps}
           />
         )}
 
-        {screen === 'people' && (
+        {state.screen === 'people' && (
           <PeopleScreen
-            onBack={() => setScreen('restaurant')}
-            onContinue={handlePeopleContinue}
-            initialPeople={people}
-            theme={theme}
-            onToggleTheme={toggleTheme}
+            initialPeople={people.map((p) => ({ id: p.id, name: p.name, hasOrder: p.items.length > 0 || (p.extras?.length ?? 0) > 0 }))}
+            editing={state.returnToFinal}
+            onBack={() =>
+              state.returnToFinal
+                ? dispatch({ type: 'NEXT_PERSON' })
+                : dispatch({ type: 'GO', screen: 'restaurant' })
+            }
+            onContinue={(list) => dispatch({ type: 'SET_PEOPLE', people: list })}
+            {...themeProps}
           />
         )}
 
-        {screen === 'billing' && (
-          <BillingScreen
-            onBack={() => setScreen('people')}
-            onContinue={handleBillingContinue}
-            selected={billing}
-            onSelect={setBilling}
-            theme={theme}
-            onToggleTheme={toggleTheme}
-            people={people}
-            initialGroups={groups}
-          />
-        )}
-
-        {screen === 'order' && (
+        {state.screen === 'order' && current && (
           <OrderScreen
-            personIndex={currentPersonIdx}
+            key={current.id}
+            personIndex={currentIdx}
             totalPeople={people.length}
-            personName={people[currentPersonIdx] || ''}
-            initialItems={orders[currentPersonIdx]?.items || []}
-            allOrders={orders}
-            onBack={handleOrderBack}
-            onComplete={handleOrderComplete}
-            theme={theme}
-            onToggleTheme={toggleTheme}
+            person={current}
+            allOrders={people}
+            editingFromFinal={state.returnToFinal}
+            onBack={() => dispatch({ type: 'ORDER_BACK' })}
+            onComplete={(items, extras) => dispatch({ type: 'SAVE_ORDER', items, extras })}
+            {...themeProps}
           />
         )}
 
-        {screen === 'personSummary' && (
+        {state.screen === 'personSummary' && current && (
           <PersonSummaryScreen
-            personIndex={currentPersonIdx}
+            personIndex={currentIdx}
             totalPeople={people.length}
-            personOrder={orders[currentPersonIdx] || { id: '', name: '', items: [] }}
-            allOrders={orders}
-            onEdit={handleEditCurrent}
-            onContinue={handlePersonSummaryContinue}
-            theme={theme}
-            onToggleTheme={toggleTheme}
+            personOrder={current}
+            allOrders={people}
+            returnsToFinal={
+              state.returnToFinal &&
+              !people.some((p) => p.id !== current.id && p.items.length === 0 && (p.extras?.length ?? 0) === 0)
+            }
+            onEdit={() => dispatch({ type: 'EDIT_CURRENT' })}
+            onContinue={() => dispatch({ type: 'NEXT_PERSON' })}
+            {...themeProps}
           />
         )}
 
-        {screen === 'final' && (
+        {state.screen === 'final' && (
           <FinalSummaryScreen
-            restaurant={restaurant}
-            billing={billing || 'single'}
-            orders={orders}
-            groups={groups}
-            people={people}
-            onEdit={handleFinalEdit}
-            onRestart={reset}
-            theme={theme}
-            onToggleTheme={toggleTheme}
-            onOpenPayment={() => {
-              if (paymentStep === 'intro') setPaymentStep('price');
-              setScreen('payment');
-            }}
+            restaurant={state.restaurant}
+            orders={people}
+            onEditPerson={(personId) => dispatch({ type: 'EDIT_PERSON', personId })}
+            onEditPeople={() => dispatch({ type: 'EDIT_PEOPLE' })}
+            onOpenPayment={() => dispatch({ type: 'OPEN_BILLING' })}
+            onFinish={() => finish(state)}
+            {...themeProps}
           />
         )}
 
-        {screen === 'payment' && (
-          <PaymentScreen
-            restaurant={restaurant}
-            billing={billing || 'single'}
-            orders={orders}
-            groups={groups}
+        {state.screen === 'billing' && (
+          <BillingScreen
             people={people}
-            theme={theme}
-            onToggleTheme={toggleTheme}
-            onBack={() => setScreen('final')}
-            priceInputs={priceInputs}
-            setPriceInputs={setPriceInputs}
-            paymentStep={paymentStep}
-            setPaymentStep={setPaymentStep}
-            hasTip={hasTip}
-            setHasTip={setHasTip}
-            tipInput={tipInput}
-            setTipInput={setTipInput}
-            paymentResult={paymentResult}
-            setPaymentResult={setPaymentResult}
+            selected={state.billing}
+            initialGroups={state.groups}
+            onBack={() => dispatch({ type: 'GO', screen: 'final' })}
+            onContinue={(billing, groups) => dispatch({ type: 'SET_BILLING', billing, groups })}
+            {...themeProps}
+          />
+        )}
+
+        {state.screen === 'payment' && state.billing && (
+          <PaymentScreen
+            restaurant={state.restaurant}
+            billing={state.billing}
+            orders={people}
+            groups={state.groups}
+            draft={state.payment}
+            onChange={(patch) => dispatch({ type: 'UPDATE_PAYMENT', patch })}
+            onBack={() => dispatch({ type: 'GO', screen: 'billing' })}
+            onBackToSummary={() => dispatch({ type: 'GO', screen: 'final' })}
+            {...themeProps}
           />
         )}
       </div>

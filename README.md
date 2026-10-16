@@ -6,12 +6,20 @@ cuenta, propina incluida.
 
 ## Flujo
 
-1. **Pupusería** — busca pupuserías cercanas (Google Places) o por nombre.
-2. **Personas** — cuántos son y cómo se llaman.
-3. **Cuentas** — una sola, cada quien la suya, o grupos personalizados.
-4. **Pedido** — cada persona elige especialidad, masa (maíz o arroz) y cantidad.
-5. **Resumen** — pedido consolidado por masa, listo para copiar y compartir.
-6. **Pago** — precio por especialidad + propina → total por cuenta.
+1. **Pupusería** (opcional) — buscá cerca con Google Places, escribí el nombre a mano o seguí sin elegir.
+2. **Personas** — cuántos son y cómo se llaman. Se puede volver a agregar o quitar a cualquiera en cualquier momento.
+3. **Pedido** — cada persona elige especialidad, masa (maíz o arroz) y cantidad, más bebidas y extras con su precio.
+4. **Resumen** — orden consolidada para la mesera, lista para copiar.
+5. **Cuentas** — una sola, cada quien la suya o grupos; se elige después de pedir.
+6. **Pago** — precio por especialidad (o el mismo para todas) + propina → cuánto paga cada cuenta, para compartir por WhatsApp.
+
+## Guardado en el teléfono
+
+Todo se guarda en `localStorage`, sin cuentas ni servidor:
+
+- `pupusastime:current:v1` — la pupuseada en curso; si se recarga la página, se retoma donde iba.
+- `pupusastime:history:v1` — las últimas 100 pupuseadas terminadas, base para las estadísticas de la etapa 3.
+- `pupusastime:prices:v1` — los últimos precios usados en cada pupusería.
 
 ## Stack
 
@@ -58,6 +66,13 @@ blindar el costo, en Google Cloud también conviene:
 
 - Restringir la API key a **Places API (New)**.
 - Poner una **cuota diaria** de requests y una **alerta de presupuesto**.
+
+## Arquitectura
+
+- `src/state/pupuseada.ts` — reducer puro con todo el flujo de pantallas; en la etapa 2 se alimentará también de eventos en tiempo real.
+- `src/state/storage.ts` — guardado local, historial y precios recordados.
+- `src/data/consolidation.ts` — consolidación de pedidos y cálculo de pagos.
+- Las personas se identifican con UUID, nunca por posición ni por nombre.
 
 ## Notas sobre el dinero
 

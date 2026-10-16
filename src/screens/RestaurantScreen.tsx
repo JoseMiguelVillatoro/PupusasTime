@@ -18,29 +18,28 @@ import { Theme } from '@/hooks/useTheme';
 import { PlaceRestaurant } from '@/data/pupusa';
 
 interface Props {
-  onSelect: (restaurant: PlaceRestaurant) => void;
+  onSelect: (restaurant: PlaceRestaurant | null) => void;
   theme: Theme;
   onToggleTheme: () => void;
   onContinue: () => void;
+  onBack: () => void;
   selected: PlaceRestaurant | null;
 }
 
 type LocationState = 'idle' | 'requesting' | 'granted' | 'denied';
 type ViewMode = 'list' | 'detail';
 
-const DEMO_RESTAURANT: PlaceRestaurant = {
-  id: 'demo-default',
-  placeId: 'demo-default',
-  name: 'Pupusería Default',
-  address: 'Ubicación de prueba',
-  locality: 'Demo',
-  rating: undefined,
-  reviewCount: undefined,
-  distanceKm: undefined,
-  openNow: undefined,
-  hours: undefined,
-  location: undefined,
-};
+/** Pupusería escrita a mano: la llave `manual:<nombre>` sirve para recordar sus precios. */
+function manualRestaurant(name: string): PlaceRestaurant {
+  const clean = name.trim();
+  const slug = clean
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+  return { id: `manual:${slug}`, placeId: `manual:${slug}`, name: clean, address: '' };
+}
 
 function formatDistance(km?: number): string {
   if (km === undefined) return '';
@@ -58,8 +57,10 @@ export function RestaurantScreen({
   theme,
   onToggleTheme,
   onContinue,
+  onBack,
   selected,
 }: Props) {
+  const [manualName, setManualName] = useState(selected?.placeId.startsWith('manual:') ? selected.name : '');
   const [locationState, setLocationState] = useState<LocationState>('idle');
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [cityName, setCityName] = useState<string>('');
@@ -397,12 +398,13 @@ export function RestaurantScreen({
 
   return (
     <div className="min-h-screen flex flex-col">
-      <TopBar right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
+      <TopBar onBack={onBack} right={<ThemeToggle theme={theme} onToggle={onToggleTheme} />} />
 
       <div className="px-5 pb-2">
         <h2 className="font-display text-3xl font-bold text-charcoal-900 dark:text-cream-50 mb-1">
           ¿Dónde estamos comiendo?
         </h2>
+        <p className="text-sm text-charcoal-700 dark:text-cream-200">Es opcional: sirve para el texto de la orden y para recordar los precios.</p>
 
         {/* Location status */}
         {showSearching && (
@@ -418,7 +420,13 @@ export function RestaurantScreen({
               📍 {cityName ? `Estás en ${cityName}` : 'Ubicación encontrada'}
             </p>
             <p className="text-sm text-charcoal-700 dark:text-cream-200 mt-0.5">
-              {loading ? 'Buscando pupuserías cercanas...' : 'Encontramos pupuserías cerca de ti'}
+              {loading
+                ? 'Buscando pupuserías cercanas…'
+                : error || needsConfig
+                  ? 'No pudimos buscar pupuserías ahora. Escribí el nombre abajo.'
+                  : restaurants.length > 0
+                    ? 'Estas son las pupuserías cerca de vos'
+                    : 'No encontramos pupuserías cerca'}
             </p>
           </div>
         )}
@@ -457,8 +465,8 @@ export function RestaurantScreen({
 
       {/* Results */}
       <div className="flex-1 px-5 space-y-3 overflow-y-auto pb-40">
-        {/* API key not configured */}
-        {needsConfig && (
+        {/* API key no configurada: solo se avisa en desarrollo */}
+        {needsConfig && import.meta.env.DEV && (
           <div className="rounded-2xl bg-terracotta-50 dark:bg-terracotta-700/20 border border-terracotta-200 dark:border-terracotta-600/30 p-5 text-center">
             <AlertCircle className="w-8 h-8 text-terracotta-400 mx-auto mb-3" />
             <p className="font-semibold text-charcoal-800 dark:text-cream-100 mb-1">
@@ -472,52 +480,36 @@ export function RestaurantScreen({
           </div>
         )}
 
-        {/* Demo fallback — shown when API is unavailable, not configured, or errors */}
-        {(needsConfig || (error && !loading) || (!loading && !error && !needsConfig && restaurants.length === 0 && !showSearching)) && (
-          <div className="rounded-2xl border-2 border-dashed border-terracotta-300 dark:border-terracotta-600/40 bg-terracotta-50/50 dark:bg-terracotta-700/10 p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="px-2 py-0.5 rounded-full bg-terracotta-200 dark:bg-terracotta-600/30 text-xs font-bold text-terracotta-600 dark:text-terracotta-200 uppercase tracking-wide">
-                Demo
-              </span>
-              <span className="text-xs text-charcoal-700/60 dark:text-cream-200/50">
-                Restaurante de prueba — no es real
-              </span>
-            </div>
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-charcoal-900 dark:text-cream-50 text-base leading-tight">
-                  {DEMO_RESTAURANT.name}
-                </p>
-              </div>
+        {/* Escribir el nombre a mano: siempre disponible */}
+        {!loading && (
+          <form
+            className="rounded-2xl border-2 border-dashed border-cream-300 dark:border-night-50 p-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (manualName.trim()) onSelect(manualRestaurant(manualName));
+            }}
+          >
+            <label htmlFor="manual-restaurant" className="block font-bold text-charcoal-900 dark:text-cream-50 mb-1">
+              ¿No aparece? Escribí el nombre
+            </label>
+            <div className="flex gap-2 mt-2">
+              <input
+                id="manual-restaurant"
+                value={manualName}
+                onChange={(e) => setManualName(e.target.value)}
+                placeholder="Pupusería de la esquina"
+                maxLength={60}
+                className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-cream-50 dark:bg-night-300 border border-cream-200 dark:border-night-100 text-charcoal-800 dark:text-cream-100 placeholder:text-charcoal-700/50 dark:placeholder:text-cream-200/40 focus:outline-none focus:border-terracotta-300 transition-colors"
+              />
               <button
-                onClick={() => handleSelect(DEMO_RESTAURANT)}
-                className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-all active:scale-90 no-tap-highlight ${
-                  selected?.id === DEMO_RESTAURANT.id
-                    ? 'bg-terracotta-400 shadow-pop'
-                    : 'border-2 border-cream-300 dark:border-night-50 hover:border-terracotta-300'
-                }`}
-                aria-label={selected?.id === DEMO_RESTAURANT.id ? 'Seleccionada' : 'Seleccionar esta pupusería'}
+                type="submit"
+                disabled={!manualName.trim()}
+                className="px-4 rounded-xl bg-terracotta-500 text-white font-bold disabled:opacity-40 active:scale-95 transition-transform no-tap-highlight shrink-0"
               >
-                <Check
-                  className={`w-4 h-4 ${
-                    selected?.id === DEMO_RESTAURANT.id ? 'text-white' : 'text-transparent'
-                  }`}
-                  strokeWidth={3}
-                />
+                {selected?.placeId === manualRestaurant(manualName || ' ').placeId ? <Check className="w-5 h-5" strokeWidth={3} /> : 'Usar'}
               </button>
             </div>
-            <div className="flex items-center gap-1.5 text-sm text-charcoal-700 dark:text-cream-200">
-              <MapPin className="w-3.5 h-3.5 shrink-0" />
-              {DEMO_RESTAURANT.address}
-            </div>
-            <div className="flex items-center gap-2 mt-1.5 text-sm text-charcoal-700 dark:text-cream-200">
-              <span className="flex items-center gap-0.5 font-semibold">
-                <Star className="w-3.5 h-3.5 fill-terracotta-400 text-terracotta-400" />
-                5.0
-              </span>
-              <span>· Demo</span>
-            </div>
-          </div>
+          </form>
         )}
 
         {/* Loading */}
@@ -535,9 +527,9 @@ export function RestaurantScreen({
           <div className="rounded-2xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/30 p-5 text-center">
             <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-3" />
             <p className="font-semibold text-charcoal-800 dark:text-cream-100 mb-1">
-              Algo salió mal
+              No pudimos buscar pupuserías
             </p>
-            <p className="text-sm text-charcoal-700 dark:text-cream-200">{error}</p>
+            <p className="text-sm text-charcoal-700 dark:text-cream-200">Revisá tu conexión o escribí el nombre a mano.</p>
           </div>
         )}
 
@@ -652,8 +644,8 @@ export function RestaurantScreen({
 
       {/* Continue button */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-cream-100/95 dark:bg-night-400/95 backdrop-blur-md px-5 py-4 safe-bottom border-t border-cream-200 dark:border-night-100">
-        <Button onClick={onContinue} disabled={!selected}>
-          {selected ? `Continuar con ${selected.name}` : 'Continuar'}
+        <Button onClick={onContinue}>
+          {selected ? `Continuar con ${selected.name}` : 'Seguir sin elegir pupusería'}
         </Button>
       </div>
     </div>

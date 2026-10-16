@@ -21,6 +21,20 @@ export interface ConsolidatedOrder {
   total: number;
 }
 
+/** Montos en centavos enteros: nunca hacemos aritmética de dinero en float. */
+export type Cents = number;
+
+export function toCents(dollars: number): Cents {
+  return Math.round(dollars * 100);
+}
+
+/** Convierte lo que alguien escribió ("0.75", "0,75", "$1") a centavos, o null si no es un monto. */
+export function parseMoney(input: string): Cents | null {
+  const cleaned = input.replace(/[$\s]/g, '').replace(',', '.');
+  if (!/^\d+(\.\d{0,2})?$/.test(cleaned)) return null;
+  return toCents(Number(cleaned));
+}
+
 export function consolidateOrders(orders: PersonOrder[]): ConsolidatedOrder {
   const buckets: Record<MasaType, Partial<Record<PupusaTypeId, number>>> = {
     maiz: {},
@@ -57,41 +71,74 @@ export function consolidateOrders(orders: PersonOrder[]): ConsolidatedOrder {
   };
 }
 
-/**
- * Las personas se identifican por posición (`p0`, `p1`, …). Antes también se
- * buscaba por nombre, lo que rompía si alguien se llamaba literalmente "p1".
- */
-export function personIdFor(index: number): string {
-  return `p${index}`;
+export interface ConsolidatedExtra {
+  label: string;
+  quantity: number;
+  cents: Cents;
 }
 
-export function resolvePersonIndex(personId: string): number {
-  const m = /^p(\d+)$/.exec(personId);
-  return m ? Number(m[1]) : -1;
+/**
+ * Junta bebidas y extras por nombre (sin distinguir mayúsculas ni tildes) para
+ * dictarle a la mesera "2 horchatas" aunque cada quien las haya escrito distinto.
+ */
+export function consolidateExtras(orders: PersonOrder[]): ConsolidatedExtra[] {
+  const byKey = new Map<string, ConsolidatedExtra>();
+  for (const person of orders) {
+    for (const x of person.extras ?? []) {
+      if (x.quantity <= 0) continue;
+      const key = normalizeLabel(x.label);
+      const prev = byKey.get(key);
+      if (prev) {
+        prev.quantity += x.quantity;
+        prev.cents += x.quantity * x.priceCents;
+      } else {
+        byKey.set(key, { label: x.label.trim(), quantity: x.quantity, cents: x.quantity * x.priceCents });
+      }
+    }
+  }
+  return [...byKey.values()].sort((a, b) => b.quantity - a.quantity);
+}
+
+function normalizeLabel(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+export function extrasCount(order: PersonOrder): number {
+  return (order.extras ?? []).reduce((s, x) => s + (x.quantity > 0 ? x.quantity : 0), 0);
 }
 
 export function groupOrders(g: AccountGroup, orders: PersonOrder[]): PersonOrder[] {
-  return g.personIds
-    .map((pid) => orders[resolvePersonIndex(pid)])
-    .filter((o): o is PersonOrder => Boolean(o));
+  const ids = new Set(g.personIds);
+  return orders.filter((o) => ids.has(o.id));
 }
 
-export function groupPersonNames(g: AccountGroup, peopleNames: string[]): string[] {
-  return g.personIds
-    .map(resolvePersonIndex)
-    .filter((idx) => idx >= 0 && idx < peopleNames.length)
-    .map((idx) => peopleNames[idx] || `Persona ${idx + 1}`);
+export function groupPersonNames(g: AccountGroup, orders: PersonOrder[]): string[] {
+  return groupOrders(g, orders).map((o) => o.name);
 }
 
-/** Quita de los grupos a personas que ya no existen (p. ej. si bajaron el número de personas). */
-export function pruneGroups(groups: AccountGroup[], peopleCount: number): AccountGroup[] {
-  return groups.map((g) => ({
-    ...g,
-    personIds: g.personIds.filter((pid) => {
-      const idx = resolvePersonIndex(pid);
-      return idx >= 0 && idx < peopleCount;
-    }),
-  }));
+/** Quita de los grupos a personas que ya no están en la pupuseada. */
+export function pruneGroups(groups: AccountGroup[], orders: PersonOrder[]): AccountGroup[] {
+  const ids = new Set(orders.map((o) => o.id));
+  return groups.map((g) => ({ ...g, personIds: g.personIds.filter((pid) => ids.has(pid)) }));
+}
+
+/** Las cuentas según el método elegido: una sola, una por persona o los grupos armados. */
+export function accountsFor(
+  billing: 'single' | 'split' | 'groups',
+  orders: PersonOrder[],
+  groups: AccountGroup[]
+): AccountGroup[] {
+  if (billing === 'single') {
+    return [{ id: 'single-account', name: 'Cuenta única', personIds: orders.map((o) => o.id) }];
+  }
+  if (billing === 'split') {
+    return orders.map((o) => ({ id: `person-${o.id}`, name: o.name, personIds: [o.id] }));
+  }
+  return groups;
 }
 
 export function personTotal(order: PersonOrder): number {
@@ -101,9 +148,7 @@ export function personTotal(order: PersonOrder): number {
 export function generateOrderText(
   restaurantName: string | null,
   consolidated: ConsolidatedOrder,
-  people: PersonOrder[],
-  groups?: AccountGroup[],
-  peopleNames?: string[]
+  people: PersonOrder[]
 ): string {
   const lines: string[] = ['🫓 PUPUSAS'];
 
@@ -130,33 +175,12 @@ export function generateOrderText(
   lines.push('');
   lines.push(`TOTAL: ${consolidated.total} PUPUSAS`);
 
-  if (groups && groups.length > 0) {
+  const extras = consolidateExtras(people);
+  if (extras.length > 0) {
     lines.push('');
-    lines.push('═════════════════');
-    lines.push('CUENTAS');
-    for (const g of groups) {
-      const gc = consolidateOrders(groupOrders(g, people));
-      const names = groupPersonNames(g, peopleNames ?? people.map((p) => p.name));
-
-      lines.push('');
-      lines.push(`CUENTA: ${g.name}`);
-      lines.push(`Personas: ${names.join(', ')}`);
-      lines.push(`Total: ${gc.total} pupusas`);
-
-      if (gc.maiz.length > 0) {
-        const maizTotal = gc.maiz.reduce((s, e) => s + e.quantity, 0);
-        lines.push(`MAÍZ · ${maizTotal}`);
-        for (const e of gc.maiz) {
-          lines.push(`${e.code} × ${e.quantity}`);
-        }
-      }
-      if (gc.arroz.length > 0) {
-        const arrozTotal = gc.arroz.reduce((s, e) => s + e.quantity, 0);
-        lines.push(`ARROZ · ${arrozTotal}`);
-        for (const e of gc.arroz) {
-          lines.push(`${e.code} × ${e.quantity}`);
-        }
-      }
+    lines.push('🥤 BEBIDAS Y EXTRAS');
+    for (const x of extras) {
+      lines.push(`${x.quantity} ${x.label}`);
     }
   }
 
@@ -165,13 +189,6 @@ export function generateOrderText(
 
 export { MASA_LABEL, MASA_EMOJI };
 
-/** Montos en centavos enteros: nunca hacemos aritmética de dinero en float. */
-export type Cents = number;
-
-export function toCents(dollars: number): Cents {
-  return Math.round(dollars * 100);
-}
-
 export interface AccountBreakdown {
   groupId: string;
   groupName: string;
@@ -179,6 +196,9 @@ export interface AccountBreakdown {
   totalPupusas: number;
   maiz: ConsolidatedEntry[];
   arroz: ConsolidatedEntry[];
+  extras: ConsolidatedExtra[];
+  pupusasSubtotal: Cents;
+  extrasSubtotal: Cents;
   subtotal: Cents;
   tip: Cents;
   total: Cents;
@@ -223,28 +243,34 @@ export function distributeProportionally(total: Cents, weights: Cents[]): Cents[
   return shares;
 }
 
+/**
+ * Calcula cuánto paga cada cuenta. `priceCentsByType` son los precios por
+ * especialidad en centavos; las bebidas y extras ya traen su precio. La propina
+ * se calcula sobre todo el consumo y se reparte proporcional a cada cuenta.
+ */
 export function calculatePayment(
   orders: PersonOrder[],
   groups: AccountGroup[],
-  peopleNames: string[],
-  priceByType: Record<string, number>,
+  priceCentsByType: Record<string, Cents>,
   tipPercent: number
 ): PaymentResult {
-  const priceCentsByType: Record<string, Cents> = {};
-  for (const [id, dollars] of Object.entries(priceByType)) {
-    priceCentsByType[id] = toCents(dollars);
-  }
-
   const accounts: AccountBreakdown[] = groups.map((g) => {
-    const gc = consolidateOrders(groupOrders(g, orders));
-    const subtotal = entriesCents([...gc.maiz, ...gc.arroz], priceCentsByType);
+    const members = groupOrders(g, orders);
+    const gc = consolidateOrders(members);
+    const extras = consolidateExtras(members);
+    const pupusasSubtotal = entriesCents([...gc.maiz, ...gc.arroz], priceCentsByType);
+    const extrasSubtotal = extras.reduce((s, x) => s + x.cents, 0);
+    const subtotal = pupusasSubtotal + extrasSubtotal;
     return {
       groupId: g.id,
       groupName: g.name,
-      personNames: groupPersonNames(g, peopleNames),
+      personNames: members.map((m) => m.name),
       totalPupusas: gc.total,
       maiz: gc.maiz,
       arroz: gc.arroz,
+      extras,
+      pupusasSubtotal,
+      extrasSubtotal,
       subtotal,
       tip: 0,
       total: subtotal,
@@ -276,10 +302,8 @@ export function formatCurrency(cents: Cents): string {
   return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 
-export function generatePaymentText(
-  restaurantName: string | null,
-  payment: PaymentResult
-): string {
+/** Desglose completo, para copiar. */
+export function generatePaymentText(restaurantName: string | null, payment: PaymentResult): string {
   const lines: string[] = ['🫓 PUPUSAS TIME'];
 
   if (restaurantName) {
@@ -294,23 +318,28 @@ export function generatePaymentText(
 
     if (a.maiz.length > 0) {
       const maizTotal = a.maiz.reduce((s, e) => s + e.quantity, 0);
-      const maizCost = entriesCents(a.maiz, payment.priceCentsByType);
       lines.push('');
       lines.push(`🌽 Maíz · ${maizTotal}`);
       for (const e of a.maiz) {
         lines.push(`${e.code} × ${e.quantity} = ${formatCurrency(lineCents(e, payment.priceCentsByType))}`);
       }
-      lines.push(`Total Maíz: ${formatCurrency(maizCost)}`);
+      lines.push(`Total Maíz: ${formatCurrency(entriesCents(a.maiz, payment.priceCentsByType))}`);
     }
     if (a.arroz.length > 0) {
       const arrozTotal = a.arroz.reduce((s, e) => s + e.quantity, 0);
-      const arrozCost = entriesCents(a.arroz, payment.priceCentsByType);
       lines.push('');
       lines.push(`🍚 Arroz · ${arrozTotal}`);
       for (const e of a.arroz) {
         lines.push(`${e.code} × ${e.quantity} = ${formatCurrency(lineCents(e, payment.priceCentsByType))}`);
       }
-      lines.push(`Total Arroz: ${formatCurrency(arrozCost)}`);
+      lines.push(`Total Arroz: ${formatCurrency(entriesCents(a.arroz, payment.priceCentsByType))}`);
+    }
+    if (a.extras.length > 0) {
+      lines.push('');
+      lines.push('🥤 Bebidas y extras');
+      for (const x of a.extras) {
+        lines.push(`${x.label} × ${x.quantity} = ${formatCurrency(x.cents)}`);
+      }
     }
 
     lines.push('');
@@ -326,4 +355,23 @@ export function generatePaymentText(
   lines.push(`TOTAL: ${formatCurrency(payment.generalTotal)}`);
 
   return lines.join('\n');
+}
+
+/** Mensaje corto para WhatsApp: cuánto paga cada cuenta y el total. */
+export function generateShareText(restaurantName: string | null, payment: PaymentResult): string {
+  const lines: string[] = [restaurantName ? `🫓 Pupuseada en ${restaurantName}` : '🫓 Pupuseada'];
+  lines.push('');
+  for (const a of payment.accounts) {
+    lines.push(`${a.groupName}: ${formatCurrency(a.total)}`);
+  }
+  lines.push('');
+  const tipNote = payment.generalTip > 0 ? ` (propina ${payment.tipPercent}% incluida)` : '';
+  lines.push(`Total de la mesa: ${formatCurrency(payment.generalTotal)}${tipNote}`);
+  lines.push('');
+  lines.push('Cuentas hechas con Pupusas Time');
+  return lines.join('\n');
+}
+
+export function whatsappShareUrl(text: string): string {
+  return `https://wa.me/?text=${encodeURIComponent(text)}`;
 }
